@@ -236,6 +236,6 @@ final class LeagueStore: ObservableObject {
         league.updatedAt = Date()
         currentLeague = league
         save(league)
-        return (result.snapshot, result.skipped)
+        return (result.snapshot, result.skippedTeams)
     }
 }
