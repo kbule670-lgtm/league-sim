@@ -20,6 +20,16 @@ enum ArchiveStore {
         baseURL.appendingPathComponent(id.uuidString, isDirectory: true)
     }
 
+    // 关键修复：保存时日期用 iso8601 编码，读取时必须用同样的 iso8601 解码。
+    // 之前读取用默认解码器（期望数字时间戳），读 iso8601 字符串会失败，
+    // 导致存档文件其实已写进 Documents，但列表读回时全部跳过、显示 0 个，
+    // 新建看起来像“弄不了”，切换存档也会读不到联赛。
+    private static func decoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
+
     private static func meta(for league: League) -> ArchiveMeta {
         ArchiveMeta(id: league.id, name: league.name, updatedAt: league.updatedAt,
                     teamCount: league.teams.count, seasonCount: league.seasons.count)
@@ -34,7 +44,7 @@ enum ArchiveStore {
         for dir in dirs {
             let metaURL = dir.appendingPathComponent("meta.json", isDirectory: false)
             guard let data = try? Data(contentsOf: metaURL),
-                  let meta = try? JSONDecoder().decode(ArchiveMeta.self, from: data) else { continue }
+                  let meta = try? decoder().decode(ArchiveMeta.self, from: data) else { continue }
             result.append(meta)
         }
         return result.sorted { $0.updatedAt > $1.updatedAt }
@@ -43,7 +53,7 @@ enum ArchiveStore {
     static func loadLeague(id: UUID) -> League? {
         let url = archiveDir(for: id).appendingPathComponent("league.json", isDirectory: false)
         guard let data = try? Data(contentsOf: url),
-              let league = try? JSONDecoder().decode(League.self, from: data) else { return nil }
+              let league = try? decoder().decode(League.self, from: data) else { return nil }
         return league
     }
 
