@@ -102,7 +102,10 @@ struct Player: Codable, Identifiable, Equatable {
 }
 
 // MARK: - 名单槽位：球员 + 在队内的角色与轮换顺序
-struct RosterSlot: Codable, Equatable {
+struct RosterSlot: Codable, Equatable, Identifiable {
+    // ForEach 直接用名单槽位时，SwiftUI 要一个稳定 id：就用球员 id，
+    // 同一球员在同一队里只会出现一次，不会撞。
+    var id: UUID { player.id }
     var player: Player
     var status: RosterStatus
     // 轮换顺序：数字越小越先上。首发 5 人默认 1-5，替补往后排。
