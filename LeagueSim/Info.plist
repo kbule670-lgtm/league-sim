@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>篮球联赛模拟</string>
+	<string>NBA模拟器</string>
 	<key>CFBundleName</key>
 	<string>LeagueSim</string>
 	<key>UILaunchStoryboardName</key>
