@@ -63,7 +63,7 @@ struct ArchiveListView: View {
                     }
                 }
             }
-            .navigationTitle("篮球联赛模拟")
+            .navigationTitle("NBA模拟器")
             .toolbar {
                 Button("新建") { showingCreate = true }
             }
