@@ -13,7 +13,7 @@ targets:
     info:
       path: LeagueSim/Info.plist
       properties:
-        CFBundleDisplayName: 篮球联赛模拟
+        CFBundleDisplayName: NBA模拟器
         UILaunchStoryboardName: ""
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -32,7 +32,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kabule.leaguesim
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        CFBundleDisplayName: 篮球联赛模拟
+        CFBundleDisplayName: NBA模拟器
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2"
         CODE_SIGNING_ALLOWED: NO
