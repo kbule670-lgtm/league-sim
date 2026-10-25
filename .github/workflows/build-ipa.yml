@@ -1,0 +1,40 @@
+name: 编译未签名ipa
+# 本文件只随本地代码一起备好，不由本阶段推送或执行。
+# 下一步由用户确认后整批一次上传 GitHub，云端 Mac 再跑它（沿用刷题 App 的路子）。
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - name: 拉代码
+        uses: actions/checkout@v4
+      - name: 装 XcodeGen
+        run: brew install xcodegen
+      - name: 生成工程
+        run: xcodegen generate
+      - name: 编译（不签名）
+        run: |
+          xcodebuild \
+            -project LeagueSim.xcodeproj \
+            -scheme LeagueSim \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+      - name: 打成未签名 ipa
+        run: |
+          mkdir -p Payload
+          cp -r "build/Build/Products/Release-iphoneos/LeagueSim.app" Payload/
+          zip -r LeagueSim-unsigned.ipa Payload
+          ls -lh LeagueSim-unsigned.ipa
+      - name: 上传 ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: LeagueSim-unsigned-ipa
+          path: LeagueSim-unsigned.ipa
