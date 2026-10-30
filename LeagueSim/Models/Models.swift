@@ -112,14 +112,29 @@ struct RosterSlot: Codable, Equatable, Identifiable {
     var rotationOrder: Int
 }
 
+// MARK: - 东西部
+// 季后赛按东西部分组：东部前 8、西部前 8，各打 7 局 4 胜。
+// 未定 = 用户没选、分区名也推不出来时，模拟时按联赛顺序前后对半分，
+// 这样 30 队空壳队也能直接跑 82 场 + 季后赛，不用先把 30 队一个个填东西部。
+enum Conference: String, Codable, CaseIterable, Identifiable {
+    case east = "东部"
+    case west = "西部"
+    case unknown = "未定"
+
+    var id: String { rawValue }
+}
+
 // MARK: - 球队
 // 固定 30 队：P0 不提供增删球队，只改球队资料与名单。
 // 配色存十六进制字符串（如 "#E86018"），App 内颜色选择器可改；没有预置球队配色。
+// conference 是新增字段（默认未定）：老存档 JSON 里没有这个键时，
+// 带默认值的 Codable 解码会用未定补上，不会把老存档读坏。
 struct Team: Codable, Identifiable, Equatable {
     var id: UUID
     var name: String
     var abbreviation: String
     var division: String
+    var conference: Conference = .unknown
     var arena: String
     var colorHex: String
     var roster: [RosterSlot]
@@ -180,11 +195,14 @@ struct Game: Codable, Identifiable, Equatable {
 }
 
 // MARK: - 球队赛季统计
+// 常规赛统计：季后赛胜负不计入这里，季后赛结果看 playoffSeries。
+// conference 是新增字段（默认空）：老快照里没有它时解码补空，历史页按分区照常看。
 struct TeamSeasonStat: Codable, Identifiable, Equatable {
     var id: UUID { teamId }
     var teamId: UUID
     var teamName: String
     var division: String
+    var conference: String = ""
     var wins: Int
     var losses: Int
     var pointsFor: Int
@@ -213,9 +231,35 @@ struct PlayerSeasonStat: Codable, Identifiable, Equatable {
     var assistsPerGame: Double { games > 0 ? Double(totalAssists) / Double(games) : 0 }
 }
 
+// MARK: - 季后赛系列赛（一轮 7 局 4 胜）
+// 只存结果与比赛 ID，不重复存 box：单场数据只在 playoffGames 里存一份，
+// 这样 82 场 + 最多约 105 场季后赛也不会把快照翻倍。
+// higherSeed 是常规赛排名更好的那支（种子号更小），lowerSeed 是另一支；
+// winnerTeamId / winnerTeamName 是这轮的胜者；gameIds 按比赛顺序排。
+struct PlayoffSeries: Codable, Identifiable, Equatable {
+    var id: UUID
+    var round: String
+    var conference: String
+    var higherSeed: Int
+    var higherSeedTeamId: UUID
+    var higherSeedTeamName: String
+    var lowerSeed: Int
+    var lowerSeedTeamId: UUID
+    var lowerSeedTeamName: String
+    var higherWins: Int
+    var lowerWins: Int
+    var winnerTeamId: UUID
+    var winnerTeamName: String
+    var gameIds: [UUID]
+}
+
 // MARK: - 赛季快照（赛季结束自动冻结）
 // 快照是值类型深拷贝：球队名、球员名、比分、统计全部存进快照，
 // 之后在球队/球员编辑器里怎么改，都不会改写已经跑完的赛季。
+// games 永远是常规赛（老快照的 29 场、新快照的 82 场/队）；季后赛单独放
+// playoffGames + playoffSeries，球员场均榜仍只算常规赛，季后赛看单场 box。
+// playoff* 与 champion* 都是新增字段（默认空）：老快照解码时补空，
+// 老赛季打开就是“无季后赛”，不会读坏、不用迁移。
 struct SeasonSnapshot: Codable, Identifiable, Equatable {
     var id: UUID
     var seasonNumber: Int
@@ -224,6 +268,10 @@ struct SeasonSnapshot: Codable, Identifiable, Equatable {
     var games: [Game]
     var teamStats: [TeamSeasonStat]
     var playerStats: [PlayerSeasonStat]
+    var playoffGames: [Game] = []
+    var playoffSeries: [PlayoffSeries] = []
+    var championTeamId: UUID? = nil
+    var championTeamName: String? = nil
     var createdAt: Date
 }
 
