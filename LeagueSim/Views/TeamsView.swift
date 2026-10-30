@@ -163,10 +163,20 @@ private struct TeamEditorFields: View {
             get: { team.abbreviation },
             set: { newValue in var copy = team; copy.abbreviation = newValue; store.updateTeam(copy) }
         ))
-        TextField("分区（如 东部/西部，可空）", text: Binding(
+        TextField("分区（如 大西洋/中部，可空）", text: Binding(
             get: { team.division },
             set: { newValue in var copy = team; copy.division = newValue; store.updateTeam(copy) }
         ))
+        Picker("东西部", selection: Binding(
+            get: { team.conference },
+            set: { newValue in var copy = team; copy.conference = newValue; store.updateTeam(copy) }
+        )) {
+            ForEach(Conference.allCases) { conference in
+                Text(conference.rawValue).tag(conference)
+            }
+        }
+        Text("东西部决定季后赛分组：东部前 8、西部前 8。选“未定”时按分区名推，推不出来就按联赛顺序前后对半分。")
+            .font(.footnote).foregroundStyle(.secondary)
         TextField("主场（如 主场馆名，可空）", text: Binding(
             get: { team.arena },
             set: { newValue in var copy = team; copy.arena = newValue; store.updateTeam(copy) }

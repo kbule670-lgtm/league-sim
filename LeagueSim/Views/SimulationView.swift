@@ -1,8 +1,9 @@
 import SwiftUI
 
-// 单赛季模拟：输种子 -> 跑单循环 -> 快照自动存进当前存档的历史。
+// 单赛季模拟：输种子 -> 跑 82 场常规赛 + 东西部季后赛 -> 快照自动存进当前存档的历史。
 // 可复现：同一名单 + 同一种子重跑，结果相同（新快照会追加一条，不覆盖旧快照）。
 // 参赛资格：激活名单 >= 5 人的球队；不够 5 人的队列入“未参赛”，不进排名。
+// 季后赛：东西部各前 8 名，7 局 4 胜；东西部各不足 8 支时只出常规赛。
 struct SimulationView: View {
     @EnvironmentObject private var store: LeagueStore
     @State private var seedText = "1"
@@ -32,10 +33,13 @@ struct SimulationView: View {
                     Section("参赛情况") {
                         let participants = league.teams.filter { $0.activeRoster.count >= 5 }
                         let skipped = league.teams.filter { $0.activeRoster.count < 5 }
+                        let eastCount = participants.filter { SimulationEngine.conference(for: $0, in: participants) == .east }.count
+                        let westCount = participants.count - eastCount
                         Text("可参赛球队：\(participants.count) 支（激活 >= 5 人）")
+                        Text("东西部：东部 \(eastCount) 支 · 西部 \(westCount) 支")
                         Text("未参赛球队：\(skipped.count) 支（激活 < 5 人，不进排名）")
                             .foregroundStyle(.secondary)
-                        Text("赛程：单循环，每两队打 1 场，每队 \(max(0, participants.count - 1)) 场（P0 不是 82 场）。")
+                        Text("赛程：常规赛每队 82 场。30 队满员时跨区每对打 2 场、同区多打；不足 30 队时按轮换排满 82 场。季后赛：东西部各前 8 名，7 局 4 胜；东西部各不足 8 支时只出常规赛，不打季后赛。")
                             .font(.footnote).foregroundStyle(.secondary)
                         if !skipped.isEmpty {
                             Text("未参赛：" + skipped.map { $0.name }.joined(separator: "、"))
@@ -59,7 +63,10 @@ struct SimulationView: View {
                     }
                     if let snapshot = lastSnapshot {
                         Section("刚跑完：第 \(snapshot.seasonNumber) 赛季（种子 \(snapshot.seed)）") {
-                            Text("比赛 \(snapshot.games.count) 场 · 参赛队 \(snapshot.teamStats.count) 支")
+                            Text("常规赛 \(snapshot.games.count) 场 · 季后赛 \(snapshot.playoffGames.count) 场 · 参赛队 \(snapshot.teamStats.count) 支")
+                            if let champion = snapshot.championTeamName {
+                                Text("总冠军：\(champion)")
+                            }
                             if !lastSkipped.isEmpty {
                                 Text("未参赛：" + lastSkipped.map { $0.name }.joined(separator: "、"))
                                     .font(.footnote).foregroundStyle(.orange)
@@ -121,7 +128,7 @@ struct HistoryView: View {
                         }
                     }
                     if let season = selected {
-                        Section("球队战绩（胜场、净胜分排序）") {
+                        Section("球队战绩（常规赛胜场、净胜分排序）") {
                             ForEach(season.teamStats) { stat in
                                 HStack {
                                     Text(stat.teamName)
@@ -129,6 +136,34 @@ struct HistoryView: View {
                                     Text("\(stat.wins) 胜 \(stat.losses) 负 · 净胜 \(stat.pointDiff)")
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
+                            }
+                        }
+                        if season.teamStats.contains(where: { !$0.conference.isEmpty }) {
+                            Section("东西部排名（常规赛）") {
+                                ForEach(["东部", "西部"], id: \.self) { conference in
+                                    Text(conference).font(.headline)
+                                    ForEach(season.teamStats.filter { $0.conference == conference }) { stat in
+                                        Text("\(stat.teamName)：\(stat.wins) 胜 \(stat.losses) 负")
+                                            .font(.caption)
+                                    }
+                                }
+                            }
+                        }
+                        if let champion = season.championTeamName {
+                            Section("季后赛") {
+                                Text("总冠军：\(champion)")
+                                ForEach(season.playoffSeries) { series in
+                                    Text("\(series.conference)\(series.round)：\(series.higherSeed) 号种子 \(series.higherSeedTeamName) \(series.higherWins):\(series.lowerWins) \(series.lowerSeed) 号种子 \(series.lowerSeedTeamName)")
+                                        .font(.caption)
+                                }
+                                if season.playoffSeries.isEmpty {
+                                    Text("季后赛数据为空").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        } else {
+                            Section("季后赛") {
+                                Text("本赛季没有季后赛（老快照，或东西部各不足 8 支参赛队，只出了常规赛）。")
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
                         }
                         Section("分区排名") {
@@ -160,12 +195,23 @@ struct HistoryView: View {
                                 }
                             }
                         }
-                        Section("每场比赛（点进去看 box，里面有虚拟播报）") {
+                        Section("常规赛每场比赛（点进去看 box，里面有虚拟播报）") {
                             ForEach(season.games) { game in
                                 NavigationLink {
                                     GameDetailView(game: game, seasonSeed: season.seed)
                                 } label: {
                                     Text("\(game.homeTeamName) \(game.homeScore) : \(game.awayScore) \(game.awayTeamName)")
+                                }
+                            }
+                        }
+                        if !season.playoffGames.isEmpty {
+                            Section("季后赛每场比赛（点进去看 box，里面有虚拟播报）") {
+                                ForEach(season.playoffGames) { game in
+                                    NavigationLink {
+                                        GameDetailView(game: game, seasonSeed: season.seed)
+                                    } label: {
+                                        Text("\(game.homeTeamName) \(game.homeScore) : \(game.awayScore) \(game.awayTeamName)")
+                                    }
                                 }
                             }
                         }
