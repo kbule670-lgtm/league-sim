@@ -183,7 +183,8 @@ private struct TeamEditorFields: View {
         ))
         ColorPicker("配色", selection: $color)
             .onAppear { color = team.color() }
-            .onChange(of: color) { _, newColor in
+            // iOS 16 写法：单参数 onChange（双参数是 iOS 17 才有的，iOS 16 编不过）。
+            .onChange(of: color) { newColor in
                 if let hex = newColor.toHex() {
                     var copy = team; copy.colorHex = hex; store.updateTeam(copy)
                 }
