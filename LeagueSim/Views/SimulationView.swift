@@ -59,7 +59,13 @@ struct SimulationView: View {
             .navigationTitle("模拟")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("退出") { store.backToArchiveList() }
+                    Button(action: { store.backToArchiveList() }) {
+                        ZStack {
+                            Circle().fill(Color.black.opacity(0.8)).frame(width: 36, height: 36)
+                            Image(systemName: "chevron.left").foregroundStyle(.white).font(.system(size: 17, weight: .semibold))
+                        }
+                    }
+                    .accessibilityLabel("退出存档")
                 }
             }
             .onAppear { if let league { seedText = "\(league.settings.lastSeed)" } }
@@ -445,7 +451,13 @@ struct HistoryView: View {
             .navigationTitle("历史快照")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("退出") { store.backToArchiveList() }
+                    Button(action: { store.backToArchiveList() }) {
+                        ZStack {
+                            Circle().fill(Color.black.opacity(0.8)).frame(width: 36, height: 36)
+                            Image(systemName: "chevron.left").foregroundStyle(.white).font(.system(size: 17, weight: .semibold))
+                        }
+                    }
+                    .accessibilityLabel("退出存档")
                 }
             }
         }

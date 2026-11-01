@@ -69,7 +69,13 @@ struct TeamsView: View {
             .navigationTitle("球队")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("退出") { store.backToArchiveList() }
+                    Button(action: { store.backToArchiveList() }) {
+                        ZStack {
+                            Circle().fill(Color.black.opacity(0.8)).frame(width: 36, height: 36)
+                            Image(systemName: "chevron.left").foregroundStyle(.white).font(.system(size: 17, weight: .semibold))
+                        }
+                    }
+                    .accessibilityLabel("退出存档")
                 }
                 Button("全部填测试名单") {
                     store.fillTestRostersForAllEmptyTeams()
