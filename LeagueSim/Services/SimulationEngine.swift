@@ -308,6 +308,12 @@ enum SimulationEngine {
                 total.totalSteals += stat.steals
                 total.totalBlocks += stat.blocks
                 total.totalMinutes += stat.minutes
+                total.totalFieldGoalsMade += stat.fieldGoalsMade
+                total.totalFieldGoalsAttempted += stat.fieldGoalsAttempted
+                total.totalThreeMade += stat.threeMade
+                total.totalThreeAttempted += stat.threeAttempted
+                total.totalFreeThrowsMade += stat.freeThrowsMade
+                total.totalFreeThrowsAttempted += stat.freeThrowsAttempted
                 playerTotals[stat.playerId] = total
             }
         }
@@ -444,19 +450,28 @@ enum SimulationEngine {
         return max(70, Int(points.rounded()))
     }
 
-    // 单场 box：先按总评算使用率分得分，再按篮板/组织能力分篮板助攻，
+    // 单场 box：先按出手权分得分，再按篮板/组织能力分篮板助攻，
     // 最后把四舍五入的余差补给本队得分最高的人，保证 box 得分和等于球队比分。
+    // 出手权 = 总评^3 × 上场时间：总评越高、上场越久，出手越多。
+    // 以前只用总评^1.5 且不看时间，替补和首发得分拉不开，用户反馈后改成这样。
+    // 得分定下来后，再把每人的得分拆成两分/三分/罚球（见 decomposeShooting），
+    // 保证 2*两分命中 + 3*三分命中 + 罚球命中 = 该球员得分，一分不差。
     private static func boxScore(home: Team, away: Team, homeScore: Int, awayScore: Int,
                                  rng: inout SeededRandom) -> [PlayerGameStat] {
         var result: [PlayerGameStat] = []
         for (team, teamScore) in [(home, homeScore), (away, awayScore)] {
             let active = team.activeRoster
             guard !active.isEmpty else { continue }
-            let weights = active.map { pow(Double(Rating.overall(for: $0.player)), 1.5) }
+            let weights = active.map { slot in
+                pow(Double(Rating.overall(for: slot.player)), 3.0)
+                    * (minutes(for: slot, in: active) / 20.0)
+            }
             let weightSum = weights.reduce(0, +)
             var stats: [PlayerGameStat] = []
+            var players: [Player] = []
             for (index, slot) in active.enumerated() {
                 let player = slot.player
+                players.append(player)
                 let share = weightSum > 0 ? weights[index] / weightSum : 1.0 / Double(active.count)
                 let rawPoints = Double(teamScore) * share * (0.85 + rng.nextDouble() * 0.3)
                 let minutes = Int(minutes(for: slot, in: active).rounded())
@@ -487,8 +502,81 @@ enum SimulationEngine {
                 stats[topIndex].points += diff
                 if stats[topIndex].points < 0 { stats[topIndex].points = 0 }
             }
+            // 得分已定型，再逐人拆投篮：出手/命中、三分、罚球全部从得分反推，
+            // 拆完再进 result，保证单场 box 的得分和仍等于球队比分。
+            for index in stats.indices {
+                let shooting = decomposeShooting(points: stats[index].points,
+                                                 player: players[index], rng: &rng)
+                stats[index].fieldGoalsMade = shooting.fieldGoalsMade
+                stats[index].fieldGoalsAttempted = shooting.fieldGoalsAttempted
+                stats[index].threeMade = shooting.threeMade
+                stats[index].threeAttempted = shooting.threeAttempted
+                stats[index].freeThrowsMade = shooting.freeThrowsMade
+                stats[index].freeThrowsAttempted = shooting.freeThrowsAttempted
+            }
             result.append(contentsOf: stats)
         }
         return result
+    }
+
+    // 把一名球员的单场得分拆成投篮：两分命中、三分命中、罚球命中。
+    // 思路：先按三分能力定三分命中数，再按罚球能力定罚球命中数（并调成奇偶，
+    // 让剩下的分一定能被两分整除），最后剩下全是两分；出手数按命中率反推，
+    // 并保证总出手 >= 总命中、三分出手 >= 三分命中、罚球出手 >= 罚球命中、
+    // 总出手 - 三分出手 >= 两分命中（即两分出手够分两分命中）。
+    // 0 分球员也可能有出手（投丢了），命中全是 0。
+    private static func decomposeShooting(points: Int, player: Player,
+                                          rng: inout SeededRandom)
+    -> (fieldGoalsMade: Int, fieldGoalsAttempted: Int, threeMade: Int,
+        threeAttempted: Int, freeThrowsMade: Int, freeThrowsAttempted: Int) {
+        let attrs = player.attributes
+        func clamp(_ value: Double, _ low: Double, _ high: Double) -> Double {
+            min(high, max(low, value))
+        }
+        if points == 0 {
+            let fieldGoalsAttempted = rng.nextInt(in: 0...3)
+            let threeAttempted = min(fieldGoalsAttempted, rng.nextInt(in: 0...2))
+            let freeThrowsAttempted = rng.nextInt(in: 0...2)
+            return (0, fieldGoalsAttempted, 0, threeAttempted, 0, freeThrowsAttempted)
+        }
+        let threeShare = clamp(0.15 + Double(attrs.threePoint - 50) * 0.004, 0.10, 0.50)
+        let threePercentage = clamp(0.28 + Double(attrs.threePoint - 70) * 0.002
+            + (rng.nextDouble() - 0.5) * 0.10, 0.20, 0.45)
+        let freeThrowPercentage = clamp(0.70 + Double(attrs.freeThrow - 70) * 0.0025, 0.60, 0.92)
+        let shootingAverage = Double(attrs.threePoint + attrs.midRange + attrs.finishing) / 3.0
+        let fieldGoalPercentage = clamp(0.38 + (shootingAverage - 70.0) * 0.002, 0.35, 0.58)
+        var threeMade = Int((Double(points) * threeShare / 3.0).rounded())
+        threeMade = min(max(threeMade, 0), points / 3)
+        if rng.nextDouble() < 0.3 && threeMade > 0 { threeMade -= 1 }
+        else if rng.nextDouble() < 0.3 && threeMade < points / 3 { threeMade += 1 }
+        let remainingAfterThree = points - threeMade * 3
+        var freeThrowsMade = Int((Double(remainingAfterThree)
+            * (0.12 + Double(attrs.freeThrow - 70) * 0.001)).rounded())
+        freeThrowsMade = min(max(freeThrowsMade, 0), remainingAfterThree)
+        if (remainingAfterThree - freeThrowsMade) % 2 != 0 {
+            if freeThrowsMade < remainingAfterThree { freeThrowsMade += 1 } else { freeThrowsMade -= 1 }
+        }
+        let twoMade = (remainingAfterThree - freeThrowsMade) / 2
+        let fieldGoalsMade = twoMade + threeMade
+        let threeAttempted: Int
+        if threeMade == 0 {
+            threeAttempted = min(rng.nextInt(in: 0...2), fieldGoalsMade)
+        } else {
+            threeAttempted = max(threeMade, Int((Double(threeMade) / threePercentage).rounded()))
+        }
+        let freeThrowsAttempted: Int
+        if freeThrowsMade == 0 {
+            freeThrowsAttempted = rng.nextInt(in: 0...1)
+        } else {
+            freeThrowsAttempted = max(freeThrowsMade, Int((Double(freeThrowsMade) / freeThrowPercentage).rounded()))
+        }
+        var fieldGoalsAttempted = fieldGoalsMade
+        if fieldGoalsMade > 0 {
+            fieldGoalsAttempted = max(fieldGoalsAttempted,
+                                     Int((Double(fieldGoalsMade) / fieldGoalPercentage).rounded()))
+        }
+        fieldGoalsAttempted = max(fieldGoalsAttempted, threeAttempted + twoMade)
+        return (fieldGoalsMade, fieldGoalsAttempted, threeMade, threeAttempted,
+                freeThrowsMade, freeThrowsAttempted)
     }
 }
