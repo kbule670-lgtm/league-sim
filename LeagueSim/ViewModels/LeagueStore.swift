@@ -69,7 +69,23 @@ final class LeagueStore: ObservableObject {
                 ArchiveStore.saveCurrentArchiveId(id)
                 refreshArchives()
             case .failure(let error):
-                enterErrorMessage = "进不去：\(error.localizedDescription)"
+                // 系统解码错误原文是英文，用户看不懂，翻译成中文再弹。
+                if let decodingError = error as? DecodingError {
+                    switch decodingError {
+                    case .keyNotFound(let key, _):
+                        enterErrorMessage = "进不去：存档里缺少字段 \(key.stringValue)，请把这条提示发给开发者"
+                    case .valueNotFound(_, let context):
+                        enterErrorMessage = "进不去：字段值缺失 \(context.codingPath.last?.stringValue ?? "")"
+                    case .typeMismatch(_, let context):
+                        enterErrorMessage = "进不去：字段类型不对 \(context.codingPath.last?.stringValue ?? "")"
+                    case .dataCorrupted(let context):
+                        enterErrorMessage = "进不去：存档数据损坏 \(context.debugDescription)"
+                    @unknown default:
+                        enterErrorMessage = "进不去：存档读不出来"
+                    }
+                } else {
+                    enterErrorMessage = "进不去：\(error.localizedDescription)"
+                }
             }
         }
     }
