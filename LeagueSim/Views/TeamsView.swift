@@ -19,28 +19,42 @@ struct TeamsView: View {
         return groups.map { TeamGroup(key: $0.key, teams: $0.value) }.sorted { $0.key < $1.key }
     }
 
+    // 再拆一层：body 本身只拼三块，每块单独算类型，编译器不再对整页一个大表达式算账。
+    private var tradeSection: some View {
+        Section("中途交易（手动）") {
+            NavigationLink {
+                TradeView()
+            } label: {
+                Text("交易：球员从一队换到另一队")
+            }
+            Text("手动控制，不自动交易；球员 ID 不变，已跑完的赛季快照不改写，下一赛季记在新队下。新增球员去球队详情点“加球员”。")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var warningsSection: some View {
+        if !Validation.leagueWarnings(for: league).isEmpty {
+            Section("联盟提醒") {
+                ForEach(Validation.leagueWarnings(for: league), id: \.self) { warning in
+                    Text(warning).font(.footnote).foregroundStyle(.orange)
+                }
+            }
+        }
+    }
+
+    private var teamSections: some View {
+        ForEach(grouped, id: \.key) { group in
+            TeamGroupSection(group: group)
+        }
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                Section("中途交易（手动）") {
-                    NavigationLink {
-                        TradeView()
-                    } label: {
-                        Text("交易：球员从一队换到另一队")
-                    }
-                    Text("手动控制，不自动交易；球员 ID 不变，已跑完的赛季快照不改写，下一赛季记在新队下。新增球员去球队详情点“加球员”。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-                if !Validation.leagueWarnings(for: league).isEmpty {
-                    Section("联盟提醒") {
-                        ForEach(Validation.leagueWarnings(for: league), id: \.self) { warning in
-                            Text(warning).font(.footnote).foregroundStyle(.orange)
-                        }
-                    }
-                }
-                ForEach(grouped, id: \.key) { group in
-                    TeamGroupSection(group: group)
-                }
+                tradeSection
+                warningsSection
+                teamSections
             }
             .navigationTitle("球队")
             .toolbar {
