@@ -469,9 +469,31 @@ enum SimulationEngine {
         var result: [PlayerGameStat] = []
         for (team, teamScore, active) in [(home, homeScore, homePlaying), (away, awayScore, awayPlaying)] {
             guard !active.isEmpty else { continue }
-            let weights = active.map { slot in
+            // 每场手感因子：先按人抽，低分偶尔爆发、高分偶尔打铁，其余在 0.70-1.30 间波动。
+            // 手感进出手权权重（不是事后乘得分），这样球队总分仍按权重归一，不会把总分打乱；
+            // 同时手感也进投篮命中率（见 decomposeShooting 的 shootingForm），爆发=多得分+命中率高，打铁反之。
+            // 上场时间每场微变 +-4 分钟，避免“每场都是固定时间、固定 9/21”这种一眼假的稳定。
+            var forms: [Double] = []
+            var variedMinutes: [Int] = []
+            for slot in active {
+                let overall = Double(Rating.overall(for: slot.player))
+                let roll = rng.nextDouble()
+                var form: Double
+                if overall < 80 && roll < 0.08 {
+                    form = 1.45
+                } else if overall >= 85 && roll < 0.08 {
+                    form = 0.60
+                } else {
+                    form = 0.70 + rng.nextDouble() * 0.60
+                }
+                forms.append(form)
+                let baseMinutes = Int(minutes(for: slot, in: active).rounded())
+                variedMinutes.append(max(5, min(40, baseMinutes + rng.nextInt(in: -4...4))))
+            }
+            let weights = active.enumerated().map { (index, slot) in
                 pow(Double(Rating.overall(for: slot.player)), 3.0)
-                    * (minutes(for: slot, in: active) / 20.0)
+                    * (Double(variedMinutes[index]) / 20.0)
+                    * forms[index]
             }
             let weightSum = weights.reduce(0, +)
             var stats: [PlayerGameStat] = []
@@ -480,8 +502,8 @@ enum SimulationEngine {
                 let player = slot.player
                 players.append(player)
                 let share = weightSum > 0 ? weights[index] / weightSum : 1.0 / Double(active.count)
-                let rawPoints = Double(teamScore) * share * (0.85 + rng.nextDouble() * 0.3)
-                let minutes = Int(minutes(for: slot, in: active).rounded())
+                let rawPoints = Double(teamScore) * share * (0.90 + rng.nextDouble() * 0.20)
+                let minutes = variedMinutes[index]
                 // 篮板：篮板能力 + 位置系数（内线拿得多），助攻：组织能力主导。
                 let positionReboundBonus: Double
                 switch player.position {
@@ -492,9 +514,9 @@ enum SimulationEngine {
                 case .pg: positionReboundBonus = 0.6
                 }
                 let rebounds = Int(((Double(player.attributes.rebounding) / 100.0) * 12.0 * positionReboundBonus
-                    * (0.7 + rng.nextDouble() * 0.6)).rounded())
+                    * (0.6 + rng.nextDouble() * 0.8)).rounded())
                 let assists = Int(((Double(player.attributes.playmaking) / 100.0) * 9.0
-                    * (0.7 + rng.nextDouble() * 0.6)).rounded())
+                    * (0.6 + rng.nextDouble() * 0.8)).rounded())
                 let steals = Int(((Double(player.attributes.perimeterDefense) / 100.0) * 2.0
                     * rng.nextDouble()).rounded())
                 let blocks = Int(((Double(player.attributes.rimProtection) / 100.0) * 2.0
@@ -522,8 +544,9 @@ enum SimulationEngine {
             // 得分已定型，再逐人拆投篮：出手/命中、三分、罚球全部从得分反推，
             // 拆完再进 result，保证单场 box 的得分和仍等于球队比分。
             for index in stats.indices {
+                let shootingForm = max(0.75, min(1.25, 0.85 + (forms[index] - 1.0) * 0.5))
                 let shooting = decomposeShooting(points: stats[index].points,
-                                                 player: players[index], rng: &rng)
+                                                 player: players[index], shootingForm: shootingForm, rng: &rng)
                 stats[index].fieldGoalsMade = shooting.fieldGoalsMade
                 stats[index].fieldGoalsAttempted = shooting.fieldGoalsAttempted
                 stats[index].threeMade = shooting.threeMade
@@ -727,7 +750,7 @@ enum SimulationEngine {
     // 并保证总出手 >= 总命中、三分出手 >= 三分命中、罚球出手 >= 罚球命中、
     // 总出手 - 三分出手 >= 两分命中（即两分出手够分两分命中）。
     // 0 分球员也可能有出手（投丢了），命中全是 0。
-    private static func decomposeShooting(points: Int, player: Player,
+    private static func decomposeShooting(points: Int, player: Player, shootingForm: Double = 1.0,
                                           rng: inout SeededRandom)
     -> (fieldGoalsMade: Int, fieldGoalsAttempted: Int, threeMade: Int,
         threeAttempted: Int, freeThrowsMade: Int, freeThrowsAttempted: Int) {
@@ -743,10 +766,10 @@ enum SimulationEngine {
         }
         let threeShare = clamp(0.15 + Double(attrs.threePoint - 50) * 0.004, 0.10, 0.50)
         let threePercentage = clamp(0.28 + Double(attrs.threePoint - 70) * 0.002
-            + (rng.nextDouble() - 0.5) * 0.10, 0.20, 0.45)
+            + (rng.nextDouble() - 0.5) * 0.24, 0.18, 0.50)
         let freeThrowPercentage = clamp(0.70 + Double(attrs.freeThrow - 70) * 0.0025, 0.60, 0.92)
         let shootingAverage = Double(attrs.threePoint + attrs.midRange + attrs.finishing) / 3.0
-        let fieldGoalPercentage = clamp(0.38 + (shootingAverage - 70.0) * 0.002, 0.35, 0.58)
+        let fieldGoalPercentage = clamp((0.38 + (shootingAverage - 70.0) * 0.002) * shootingForm, 0.28, 0.65)
         var threeMade = Int((Double(points) * threeShare / 3.0).rounded())
         threeMade = min(max(threeMade, 0), points / 3)
         if rng.nextDouble() < 0.3 && threeMade > 0 { threeMade -= 1 }
