@@ -172,6 +172,11 @@ struct ArchiveSettingsView: View {
                 }
             }
             .navigationTitle("存档")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("退出") { store.backToArchiveList() }
+                }
+            }
             .alert("改名", isPresented: $showingRename) {
                 TextField("新名字", text: $renameText)
                 Button("取消", role: .cancel) {}

@@ -68,6 +68,9 @@ struct TeamsView: View {
             }
             .navigationTitle("球队")
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("退出") { store.backToArchiveList() }
+                }
                 Button("全部填测试名单") {
                     store.fillTestRostersForAllEmptyTeams()
                 }
