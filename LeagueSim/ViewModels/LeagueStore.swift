@@ -495,9 +495,9 @@ final class LeagueStore: ObservableObject {
             guard let series = ongoing.playoffSeries.last(where: { $0.round == "总决赛" }) else { return false }
             return series.gameIds.contains(game.id)
         }
-        let computed = SimulationEngine.computeAwards(regularPlayerStats: regularPlayerStats, regularTeamStats: regularTeamStats, playoffGames: ongoing.playoffGames, finalsGames: finalsGames, snapshotId: snapshotId, positionMap: positionMap)
         let championId = ongoing.playoffSeries.last(where: { $0.round == "总决赛" })?.winnerTeamId
         let championName = ongoing.playoffSeries.last(where: { $0.round == "总决赛" })?.winnerTeamName
+        let computed = SimulationEngine.computeAwards(regularPlayerStats: regularPlayerStats, regularTeamStats: regularTeamStats, playoffGames: ongoing.playoffGames, finalsGames: finalsGames, snapshotId: snapshotId, positionMap: positionMap, championTeamId: championId)
         let snapshot = SeasonSnapshot(id: snapshotId, seasonNumber: ongoing.seasonNumber, seed: ongoing.seed, settings: ongoing.settings, games: ongoing.playedGames, teamStats: regularTeamStats, playerStats: regularPlayerStats, playoffGames: ongoing.playoffGames, playoffSeries: ongoing.playoffSeries, championTeamId: championId, championTeamName: championName, createdAt: Date())
         var snap = snapshot
         snap.awards = computed.awards; snap.allNBAFirst = computed.first; snap.allNBASecond = computed.second; snap.allNBAThird = computed.third; snap.seasonLeaders = computed.leaders; snap.playoffPlayerStats = computed.playoffPlayerStats
