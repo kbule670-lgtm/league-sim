@@ -173,7 +173,7 @@ struct ArchiveSettingsView: View {
             }
             .navigationTitle("存档")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button("退出") { store.backToArchiveList() }
                 }
             }

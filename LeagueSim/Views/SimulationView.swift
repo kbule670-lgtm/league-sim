@@ -58,7 +58,7 @@ struct SimulationView: View {
             }
             .navigationTitle("模拟")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button("退出") { store.backToArchiveList() }
                 }
             }
@@ -444,7 +444,7 @@ struct HistoryView: View {
             }
             .navigationTitle("历史快照")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button("退出") { store.backToArchiveList() }
                 }
             }
