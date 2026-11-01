@@ -203,7 +203,7 @@ private struct PlayerRow: View {
         HStack {
             VStack(alignment: .leading) {
                 Text(slot.player.name).font(.headline)
-                Text("\(slot.player.position.rawValue) · #\(slot.player.jerseyNumber) · 总评 \(Rating.overall(for: slot.player))")
+                Text("\(slot.player.position.name) · #\(slot.player.jerseyNumber) · 总评 \(Rating.overall(for: slot.player))")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()

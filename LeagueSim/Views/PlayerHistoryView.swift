@@ -21,8 +21,27 @@ struct PlayerHistoryView: View {
             }
     }
 
+    private var honors: [PlayerHonor] {
+        guard let league = store.currentLeague else { return [] }
+        for team in league.teams { for slot in team.roster where slot.player.id == playerId { return slot.player.honors } }
+        return []
+    }
+
     var body: some View {
         List {
+            Section("个人荣誉") {
+                let champs = honors.filter { $0.type == "总冠军" }
+                let fmvps = honors.filter { $0.type == "FMVP" }
+                Text("总冠军 \(champs.count) 次 · FMVP \(fmvps.count) 次")
+                if champs.isEmpty && fmvps.isEmpty && honors.isEmpty {
+                    Text("还没有荣誉：赛季结算后，MVP、得分王、最佳阵容、总冠军、FMVP 会记到这里。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(champs, id: \.id) { h in Text("总冠军：第 \(h.seasonNumber) 赛季 · \(h.teamName)").font(.caption) }
+                ForEach(honors.filter { $0.type != "总冠军" }, id: \.id) { h in
+                    Text("\(h.type)：第 \(h.seasonNumber) 赛季 · \(h.teamName) \(h.detail)").font(.caption)
+                }
+            }
             if rows.isEmpty {
                 Section {
                     Text("还没有 \(playerName) 的赛季数据：去“模拟”跑完一赛季，这里就会按赛季列出来。")
@@ -39,7 +58,7 @@ struct PlayerHistoryView: View {
                                     stat.assistsPerGame, stat.totalPoints))
                             .font(.caption).foregroundStyle(.secondary)
                         if stat.totalFieldGoalsAttempted > 0 || stat.totalFreeThrowsAttempted > 0 {
-                            Text(String(format: "投篮 %d中%d（%.1f%%）· 三分 %d中%d（%.1f%%）· 罚球 %d中%d（%.1f%%）",
+                            Text(String(format: "投篮 %d/%d（%.1f%%）· 三分 %d/%d（%.1f%%）· 罚球 %d/%d（%.1f%%）",
                                         stat.totalFieldGoalsMade, stat.totalFieldGoalsAttempted,
                                         stat.fieldGoalPercentage * 100,
                                         stat.totalThreeMade, stat.totalThreeAttempted,

@@ -60,6 +60,9 @@ struct ArchiveListView: View {
                         .contentShape(Rectangle())
                         .onTapGesture { store.enterArchive(id: meta.id) }
                         .swipeActions {
+                            Button("复制") {
+                                store.copyArchive(id: meta.id)
+                            }.tint(.green)
                             Button("改名") {
                                 archiveToRename = meta
                                 renameText = meta.name
