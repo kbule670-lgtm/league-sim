@@ -21,6 +21,7 @@ struct SimulationView: View {
     @State private var foldSimStandings = true
     @State private var foldLeaderboard = false
     @State private var foldSchedule = true
+    @State private var foldSimPlayoffSeries = true
 
     private var league: League? { store.currentLeague }
 
@@ -56,6 +57,11 @@ struct SimulationView: View {
                 }
             }
             .navigationTitle("模拟")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("退出") { store.backToArchiveList() }
+                }
+            }
             .onAppear { if let league { seedText = "\(league.settings.lastSeed)" } }
             .onDisappear { autoPlaying = false }
             .onReceive(Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()) { _ in
@@ -147,13 +153,18 @@ struct SimulationView: View {
             }
             }
             if ongoing.playoffRound >= 1 {
-                Section("季后赛系列赛") {
+                Section {
+                Button { foldSimPlayoffSeries.toggle() } label: {
+                    HStack { Text("季后赛系列赛"); Spacer(); Image(systemName: foldSimPlayoffSeries ? "chevron.down" : "chevron.right") }
+                }
+                if foldSimPlayoffSeries {
                     if ongoing.playoffSeries.isEmpty { Text("还没打季后赛。").font(.caption).foregroundStyle(.secondary) }
                     ForEach(ongoing.playoffSeries) { series in
                         Text("\(series.conference)\(series.round)：\(series.higherSeed) 号 \(series.higherSeedTeamName) \(series.higherWins):\(series.lowerWins) \(series.lowerSeed) 号 \(series.lowerSeedTeamName)")
                             .font(.caption)
                     }
                 }
+            }
             }
             if ongoing.playoffRound == 0 {
                 Section {
@@ -229,6 +240,10 @@ struct HistoryView: View {
     @State private var foldPlayerBoard = false
     @State private var foldRegularGames = false
     @State private var foldPlayoffGames = false
+    @State private var foldEastWest = false
+    @State private var foldHistoryPlayoffs = true
+    @State private var foldAwards = true
+    @State private var foldDivisions = false
 
     private var seasons: [SeasonSnapshot] {
         store.currentLeague?.seasons.sorted { $0.seasonNumber > $1.seasonNumber } ?? []
@@ -274,7 +289,11 @@ struct HistoryView: View {
                         }
             }
                         if season.teamStats.contains(where: { !$0.conference.isEmpty }) {
-                            Section("东西部排名（常规赛）") {
+                            Section {
+                Button { foldEastWest.toggle() } label: {
+                    HStack { Text("东西部排名（常规赛）"); Spacer(); Image(systemName: foldEastWest ? "chevron.down" : "chevron.right") }
+                }
+                if foldEastWest {
                                 ForEach(["东部", "西部"], id: \.self) { conference in
                                     Text(conference).font(.headline)
                                     ForEach(season.teamStats.filter { $0.conference == conference }) { stat in
@@ -283,9 +302,14 @@ struct HistoryView: View {
                                     }
                                 }
                             }
+            }
                         }
                         if let champion = season.championTeamName {
-                            Section("季后赛（点进一轮看各场比赛）") {
+                            Section {
+                Button { foldHistoryPlayoffs.toggle() } label: {
+                    HStack { Text("季后赛（点进一轮看各场比赛）"); Spacer(); Image(systemName: foldHistoryPlayoffs ? "chevron.down" : "chevron.right") }
+                }
+                if foldHistoryPlayoffs {
                                 Text("总冠军：\(champion)")
                                 ForEach(season.playoffSeries) { series in
                                     NavigationLink {
@@ -299,6 +323,7 @@ struct HistoryView: View {
                                     Text("季后赛数据为空").font(.caption).foregroundStyle(.secondary)
                                 }
                             }
+            }
                         } else {
                             Section("季后赛") {
                                 Text("本赛季没有季后赛（老快照，或东西部各不足 8 支参赛队，只出了常规赛）。")
@@ -306,7 +331,11 @@ struct HistoryView: View {
                             }
                         }
                         if !season.awards.isEmpty || !season.seasonLeaders.isEmpty {
-                            Section("赛季总结（奖项与历史之王）") {
+                            Section {
+                Button { foldAwards.toggle() } label: {
+                    HStack { Text("赛季总结（奖项与历史之王）"); Spacer(); Image(systemName: foldAwards ? "chevron.down" : "chevron.right") }
+                }
+                if foldAwards {
                                 if let champion = season.championTeamName { Text("总冠军：\(champion)") }
                                 ForEach(season.awards) { award in
                                     Text("\(award.title)：\(award.playerName)（\(award.teamName)） \(award.valueText)")
@@ -329,8 +358,13 @@ struct HistoryView: View {
                                     Text("老快照没有奖项数据，新赛季结算后这里才有。").font(.caption).foregroundStyle(.secondary)
                                 }
                             }
+            }
                         }
-                        Section("分区排名") {
+                        Section {
+                Button { foldDivisions.toggle() } label: {
+                    HStack { Text("分区排名"); Spacer(); Image(systemName: foldDivisions ? "chevron.down" : "chevron.right") }
+                }
+                if foldDivisions {
                             let divisions = Dictionary(grouping: season.teamStats) {
                                 $0.division.isEmpty ? "未分组" : $0.division
                             }
@@ -342,6 +376,7 @@ struct HistoryView: View {
                                 }
                             }
                         }
+            }
                         Section {
                 Button { foldPlayerBoard.toggle() } label: {
                     HStack { Text("球员场均榜（按场均得分）"); Spacer(); Image(systemName: foldPlayerBoard ? "chevron.down" : "chevron.right") }
@@ -408,6 +443,11 @@ struct HistoryView: View {
                 }
             }
             .navigationTitle("历史快照")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("退出") { store.backToArchiveList() }
+                }
+            }
         }
     }
 }
