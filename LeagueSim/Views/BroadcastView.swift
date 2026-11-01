@@ -42,6 +42,7 @@ final class BroadcastPlayer: ObservableObject {
     @Published var isPlaying = false
     @Published var speed: Double = 1.0
     @Published private(set) var taskGeneration = 0
+    @Published var lastAction = "进页"
     private(set) var hasStarted = false
     private var task: Task<Void, Never>?
 
@@ -52,12 +53,13 @@ final class BroadcastPlayer: ObservableObject {
 
     var isFinished: Bool { !events.isEmpty && shownCount >= events.count }
     var debugLine: String {
-        "诊断：播放器 \(String(game.id.uuidString.suffix(4))) · 已播 \(shownCount)/\(events.count) · \(isPlaying ? "播放中" : "已暂停/未播") · 任务代次 \(taskGeneration)"
+        "诊断：播放器 \(String(game.id.uuidString.suffix(4))) · 已播 \(shownCount)/\(events.count) · \(isPlaying ? "播放中" : "已暂停/未播") · 任务代次 \(taskGeneration) · 上次：\(lastAction)"
     }
 
     func startIfNeeded() {
         if !hasStarted {
             hasStarted = true
+            lastAction = "首次自动播"
             print("[播报] 首次进页自动播 game=\(game.id)")
             play()
         } else {
@@ -72,6 +74,7 @@ final class BroadcastPlayer: ObservableObject {
             return
         }
         isPlaying = true
+        lastAction = "播放"
         task?.cancel()
         taskGeneration += 1
         let generation = taskGeneration
@@ -96,6 +99,7 @@ final class BroadcastPlayer: ObservableObject {
     }
 
     func pause() {
+        lastAction = "暂停"
         print("[播报] 暂停点击 shown=\(shownCount) generation=\(taskGeneration)")
         isPlaying = false
         taskGeneration += 1
@@ -104,6 +108,7 @@ final class BroadcastPlayer: ObservableObject {
     }
 
     func replay() {
+        lastAction = "重播"
         print("[播报] 重播点击（唯一允许清零的操作）旧 shown=\(shownCount)")
         isPlaying = false
         taskGeneration += 1
@@ -115,6 +120,7 @@ final class BroadcastPlayer: ObservableObject {
     }
 
     func skip() {
+        lastAction = "快速跳过"
         print("[播报] 快速跳过 shown=\(shownCount)")
         isPlaying = false
         taskGeneration += 1
@@ -149,9 +155,11 @@ struct BroadcastView: View {
         return player.events[min(player.shownCount, player.events.count) - 1].timeText
     }
 
+    @State private var showingReplayConfirm = false
+
     var body: some View {
-        List {
-            Section {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text("\(game.homeTeamName) \(currentHome) : \(currentAway) \(game.awayTeamName)")
                     .font(.title3).bold()
                 Text("剩余时间 \(currentTime) · 终场 \(game.homeScore) : \(game.awayScore)")
@@ -165,8 +173,6 @@ struct BroadcastView: View {
                 }
                 Text(player.debugLine)
                     .font(.caption2).foregroundStyle(.secondary)
-            }
-            Section {
                 HStack {
                     Button(player.isPlaying ? "暂停" : "播放") {
                         if player.isPlaying {
@@ -183,7 +189,7 @@ struct BroadcastView: View {
                     .disabled(player.events.isEmpty || player.isFinished)
                     Spacer()
                     Button("重播") {
-                        player.replay()
+                        showingReplayConfirm = true
                     }
                     .disabled(player.events.isEmpty)
                 }
@@ -194,29 +200,41 @@ struct BroadcastView: View {
                     Text("4x").tag(4.0)
                 }
                 .pickerStyle(.segmented)
-                Text("当前 \(player.speed, specifier: "%.1f")x，每步约 \(0.5 / player.speed, specifier: "%.3f") 秒；暂停只停住，播完后播放键不可点、只能点重播。")
+                Text("当前 \(player.speed, specifier: "%.1f")x，每步约 \(0.5 / player.speed, specifier: "%.3f") 秒；暂停只停住，播完后播放键不可点、只能点重播；重播要点确认才清零。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
-            Section("最近得分") {
-                if player.shownCount == 0 {
-                    Text("点播放，从 0:0 开始播。").foregroundStyle(.secondary)
-                } else {
-                    let recent = player.events.prefix(player.shownCount).suffix(10).reversed()
-                    ForEach(recent) { event in
-                        if event.scorerName.isEmpty {
-                            Text("\(event.timeText) · \(event.isHomeScoring ? game.homeTeamName : game.awayTeamName) +\(event.points) · \(event.homeScore) : \(event.awayScore)")
-                                .font(.caption)
-                        } else {
-                            Text("\(event.timeText) · \(event.scorerName) +\(event.points)（\(event.isHomeScoring ? game.homeTeamName : game.awayTeamName)）· \(event.homeScore) : \(event.awayScore)")
-                                .font(.caption)
+            .padding()
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("最近得分").font(.headline)
+                    if player.shownCount == 0 {
+                        Text("点播放，从 0:0 开始播。").foregroundStyle(.secondary)
+                    } else {
+                        let recent = player.events.prefix(player.shownCount).suffix(10).reversed()
+                        ForEach(recent) { event in
+                            if event.scorerName.isEmpty {
+                                Text("\(event.timeText) · \(event.isHomeScoring ? game.homeTeamName : game.awayTeamName) +\(event.points) · \(event.homeScore) : \(event.awayScore)")
+                                    .font(.caption)
+                            } else {
+                                Text("\(event.timeText) · \(event.scorerName) +\(event.points)（\(event.isHomeScoring ? game.homeTeamName : game.awayTeamName)）· \(event.homeScore) : \(event.awayScore)")
+                                    .font(.caption)
+                            }
                         }
                     }
                 }
+                .padding()
             }
         }
         .navigationTitle("虚拟播报")
         .onAppear {
             player.startIfNeeded()
+        }
+        .alert("确认重播？", isPresented: $showingReplayConfirm) {
+            Button("取消", role: .cancel) {}
+            Button("确认重播", role: .destructive) { player.replay() }
+        } message: {
+            Text("重播会把比分清零、从 0:0 重新播。暂停和换倍速不会清零。")
         }
     }
 }

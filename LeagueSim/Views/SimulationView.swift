@@ -18,6 +18,9 @@ struct SimulationView: View {
     @State private var showingStartError = false
     @State private var leaderCategory = "得分"
     @State private var leaderPlayoff = false
+    @State private var foldSimStandings = true
+    @State private var foldLeaderboard = false
+    @State private var foldSchedule = true
 
     private var league: League? { store.currentLeague }
 
@@ -106,7 +109,11 @@ struct SimulationView: View {
                     }
                 }
             }
-            Section("排名（常规赛，按已打场次算）") {
+            Section {
+                Button { foldSimStandings.toggle() } label: {
+                    HStack { Text("排名（常规赛，按已打场次算）"); Spacer(); Image(systemName: foldSimStandings ? "chevron.down" : "chevron.right") }
+                }
+                if foldSimStandings {
                 ForEach(["东部", "西部"], id: \.self) { conf in
                     Text(conf).font(.headline)
                     let confTeams = standings.filter { SimulationEngine.conference(for: $0, in: participants).rawValue == conf }
@@ -117,7 +124,12 @@ struct SimulationView: View {
                     }
                 }
             }
-            Section("联盟数据榜前 30（实时更新）") {
+            }
+            Section {
+                Button { foldLeaderboard.toggle() } label: {
+                    HStack { Text("联盟数据榜前 30（实时更新）"); Spacer(); Image(systemName: foldLeaderboard ? "chevron.down" : "chevron.right") }
+                }
+                if foldLeaderboard {
                 Picker("类别", selection: $leaderCategory) {
                     ForEach(["得分", "篮板", "助攻", "抢断", "盖帽", "投篮命中率", "三分命中率", "罚球命中率"], id: \.self) { Text($0) }
                 }
@@ -133,6 +145,7 @@ struct SimulationView: View {
                 }
                 if sortedBoard.isEmpty { Text("还没打比赛，榜是空的。").font(.caption).foregroundStyle(.secondary) }
             }
+            }
             if ongoing.playoffRound >= 1 {
                 Section("季后赛系列赛") {
                     if ongoing.playoffSeries.isEmpty { Text("还没打季后赛。").font(.caption).foregroundStyle(.secondary) }
@@ -143,7 +156,11 @@ struct SimulationView: View {
                 }
             }
             if ongoing.playoffRound == 0 {
-                Section("常规赛对战表（点未打的场选怎么打，已打的点进看 box）") {
+                Section {
+                Button { foldSchedule.toggle() } label: {
+                    HStack { Text("常规赛对战表（点未打的场选怎么打，已打的点进看 box）"); Spacer(); Image(systemName: foldSchedule ? "chevron.down" : "chevron.right") }
+                }
+                if foldSchedule {
                     ForEach(ongoing.schedule) { scheduled in
                         let home = league.teams.first { $0.id == scheduled.homeTeamId }
                         let away = league.teams.first { $0.id == scheduled.awayTeamId }
@@ -164,6 +181,7 @@ struct SimulationView: View {
                         }
                     }
                 }
+            }
             }
         }
     }
@@ -207,6 +225,10 @@ struct HistoryView: View {
     @EnvironmentObject private var store: LeagueStore
     @State private var selectedSeasonId: UUID?
     @State private var searchText = ""
+    @State private var foldStandings = true
+    @State private var foldPlayerBoard = false
+    @State private var foldRegularGames = false
+    @State private var foldPlayoffGames = false
 
     private var seasons: [SeasonSnapshot] {
         store.currentLeague?.seasons.sorted { $0.seasonNumber > $1.seasonNumber } ?? []
@@ -236,7 +258,11 @@ struct HistoryView: View {
                         }
                     }
                     if let season = selected {
-                        Section("球队战绩（常规赛胜场、净胜分排序）") {
+                        Section {
+                Button { foldStandings.toggle() } label: {
+                    HStack { Text("球队战绩（常规赛胜场、净胜分排序）"); Spacer(); Image(systemName: foldStandings ? "chevron.down" : "chevron.right") }
+                }
+                if foldStandings {
                             ForEach(season.teamStats) { stat in
                                 HStack {
                                     Text(stat.teamName)
@@ -246,6 +272,7 @@ struct HistoryView: View {
                                 }
                             }
                         }
+            }
                         if season.teamStats.contains(where: { !$0.conference.isEmpty }) {
                             Section("东西部排名（常规赛）") {
                                 ForEach(["东部", "西部"], id: \.self) { conference in
@@ -315,7 +342,11 @@ struct HistoryView: View {
                                 }
                             }
                         }
-                        Section("球员场均榜（按场均得分）") {
+                        Section {
+                Button { foldPlayerBoard.toggle() } label: {
+                    HStack { Text("球员场均榜（按场均得分）"); Spacer(); Image(systemName: foldPlayerBoard ? "chevron.down" : "chevron.right") }
+                }
+                if foldPlayerBoard {
                             TextField("搜球员或球队", text: $searchText)
                             let filtered = season.playerStats.filter { stat in
                                 searchText.isEmpty
@@ -342,7 +373,12 @@ struct HistoryView: View {
                                 }
                             }
                         }
-                        Section("常规赛每场比赛（点进去看 box，里面有虚拟播报）") {
+            }
+                        Section {
+                Button { foldRegularGames.toggle() } label: {
+                    HStack { Text("常规赛每场比赛（点进去看 box，里面有虚拟播报）"); Spacer(); Image(systemName: foldRegularGames ? "chevron.down" : "chevron.right") }
+                }
+                if foldRegularGames {
                             ForEach(season.games) { game in
                                 NavigationLink {
                                     GameDetailView(game: game, seasonSeed: season.seed)
@@ -351,8 +387,13 @@ struct HistoryView: View {
                                 }
                             }
                         }
+            }
                         if !season.playoffGames.isEmpty {
-                            Section("季后赛每场比赛（点进去看 box，里面有虚拟播报）") {
+                            Section {
+                Button { foldPlayoffGames.toggle() } label: {
+                    HStack { Text("季后赛每场比赛（点进去看 box，里面有虚拟播报）"); Spacer(); Image(systemName: foldPlayoffGames ? "chevron.down" : "chevron.right") }
+                }
+                if foldPlayoffGames {
                                 ForEach(season.playoffGames) { game in
                                     NavigationLink {
                                         GameDetailView(game: game, seasonSeed: season.seed)
@@ -361,6 +402,7 @@ struct HistoryView: View {
                                     }
                                 }
                             }
+            }
                         }
                     }
                 }
