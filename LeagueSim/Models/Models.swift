@@ -16,11 +16,11 @@ enum Position: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var name: String {
         switch self {
-        case .pg: return "控卫 PG"
-        case .sg: return "分卫 SG"
-        case .sf: return "小前 SF"
-        case .pf: return "大前 PF"
-        case .c: return "中锋 C"
+        case .pg: return "控卫"
+        case .sg: return "分卫"
+        case .sf: return "小前"
+        case .pf: return "大前"
+        case .c: return "中锋"
         }
     }
 }
@@ -73,10 +73,24 @@ enum RosterStatus: String, Codable, CaseIterable, Identifiable {
     var isActive: Bool { self != .inactive }
 }
 
+// MARK: - 球员个人荣誉
+// 一条荣誉 = 一个奖项/一次夺冠/一次 FMVP，带赛季号和球队名，夺冠次数、FMVP 次数就是按类型计数。
+struct PlayerHonor: Codable, Equatable, Identifiable {
+    var id: UUID
+    var type: String
+    var seasonNumber: Int
+    var teamName: String
+    var detail: String
+
+    init(id: UUID = UUID(), type: String, seasonNumber: Int, teamName: String, detail: String = "") {
+        self.id = id; self.type = type; self.seasonNumber = seasonNumber; self.teamName = teamName; self.detail = detail
+    }
+}
+
 // MARK: - 球员
 // id 只在同一个存档内保证稳定：换存档后 id 不互通，跨存档不要拿 id 对人。
 struct Player: Codable, Identifiable, Equatable {
-    enum CodingKeys: String, CodingKey { case id, name, jerseyNumber, position, age, heightCm, weightKg, attributes, overallOverride }
+    enum CodingKeys: String, CodingKey { case id, name, jerseyNumber, position, age, heightCm, weightKg, attributes, overallOverride, honors }
     var id: UUID
     var name: String
     var jerseyNumber: Int
@@ -87,10 +101,12 @@ struct Player: Codable, Identifiable, Equatable {
     var attributes: Attributes
     // 手动总评：nil = 按位置权重自动算；有值 = 用手动值（界面可开关）。
     var overallOverride: Int?
+    // 个人荣誉：MVP、得分王、最佳阵容、总冠军、FMVP 等，赛季结束时记入，换队不丢（球员 ID 不变）。
+    var honors: [PlayerHonor] = []
 
     init(id: UUID = UUID(), name: String, jerseyNumber: Int, position: Position,
          age: Int = 25, heightCm: Int = 195, weightKg: Int = 90,
-         attributes: Attributes = Attributes(), overallOverride: Int? = nil) {
+         attributes: Attributes = Attributes(), overallOverride: Int? = nil, honors: [PlayerHonor] = []) {
         self.id = id
         self.name = name
         self.jerseyNumber = jerseyNumber
@@ -100,6 +116,7 @@ struct Player: Codable, Identifiable, Equatable {
         self.weightKg = weightKg
         self.attributes = attributes.clamped()
         self.overallOverride = overallOverride.map { min(99, max(0, $0)) }
+        self.honors = honors
     }
 }
 
@@ -179,7 +196,7 @@ struct LeagueSettings: Codable, Equatable {
 // 老比赛打开就是投篮 0 中 0，不会读坏；新比赛才有真实出手/命中。
 // 约束（引擎保证）：总命中 = 两分命中 + 三分命中；得分 = 两分命中*2 + 三分命中*3 + 罚球命中。
 struct PlayerGameStat: Codable, Equatable {
-    enum CodingKeys: String, CodingKey { case playerId, playerName, teamId, minutes, points, rebounds, assists, steals, blocks, fieldGoalsMade, fieldGoalsAttempted, threeMade, threeAttempted, freeThrowsMade, freeThrowsAttempted }
+    enum CodingKeys: String, CodingKey { case playerId, playerName, teamId, minutes, points, rebounds, assists, steals, blocks, fieldGoalsMade, fieldGoalsAttempted, threeMade, threeAttempted, freeThrowsMade, freeThrowsAttempted, fouls }
     var playerId: UUID
     var playerName: String
     var teamId: UUID
@@ -195,6 +212,8 @@ struct PlayerGameStat: Codable, Equatable {
     var threeAttempted: Int = 0
     var freeThrowsMade: Int = 0
     var freeThrowsAttempted: Int = 0
+    var fouls: Int = 0
+    var fouledOut: Bool { fouls >= 6 }
 
     var fieldGoalPercentage: Double {
         fieldGoalsAttempted > 0 ? Double(fieldGoalsMade) / Double(fieldGoalsAttempted) : 0
@@ -240,7 +259,7 @@ struct TeamSeasonStat: Codable, Identifiable, Equatable {
 // MARK: - 球员赛季统计（累计 + 场均都存，界面直接取，不用现算）
 // 三元组 playerId + seasonId + teamId：赛季快照里存死，之后改名单不污染历史。
 struct PlayerSeasonStat: Codable, Identifiable, Equatable {
-    enum CodingKeys: String, CodingKey { case playerId, playerName, teamId, teamName, seasonId, games, totalPoints, totalRebounds, totalAssists, totalSteals, totalBlocks, totalMinutes, totalFieldGoalsMade, totalFieldGoalsAttempted, totalThreeMade, totalThreeAttempted, totalFreeThrowsMade, totalFreeThrowsAttempted }
+    enum CodingKeys: String, CodingKey { case playerId, playerName, teamId, teamName, seasonId, games, totalPoints, totalRebounds, totalAssists, totalSteals, totalBlocks, totalMinutes, totalFieldGoalsMade, totalFieldGoalsAttempted, totalThreeMade, totalThreeAttempted, totalFreeThrowsMade, totalFreeThrowsAttempted, totalFouls, position }
     var id: UUID { playerId }
     var playerId: UUID
     var playerName: String
@@ -261,6 +280,11 @@ struct PlayerSeasonStat: Codable, Identifiable, Equatable {
     var totalThreeAttempted: Int = 0
     var totalFreeThrowsMade: Int = 0
     var totalFreeThrowsAttempted: Int = 0
+    var totalFouls: Int = 0
+    var position: String = ""
+    var foulsPerGame: Double { games > 0 ? Double(totalFouls) / Double(games) : 0 }
+    var stealsPerGame: Double { games > 0 ? Double(totalSteals) / Double(games) : 0 }
+    var blocksPerGame: Double { games > 0 ? Double(totalBlocks) / Double(games) : 0 }
     var fieldGoalPercentage: Double {
         totalFieldGoalsAttempted > 0 ? Double(totalFieldGoalsMade) / Double(totalFieldGoalsAttempted) : 0
     }
@@ -297,6 +321,53 @@ struct PlayoffSeries: Codable, Identifiable, Equatable {
     var gameIds: [UUID]
 }
 
+// MARK: - 赛季奖项与历史之王
+struct SeasonAward: Codable, Equatable, Identifiable {
+    var id: UUID
+    var title: String
+    var playerId: UUID?
+    var playerName: String
+    var teamName: String
+    var valueText: String
+    init(id: UUID = UUID(), title: String, playerId: UUID? = nil, playerName: String, teamName: String, valueText: String = "") {
+        self.id = id; self.title = title; self.playerId = playerId; self.playerName = playerName; self.teamName = teamName; self.valueText = valueText
+    }
+}
+struct AllNBAEntry: Codable, Equatable {
+    var playerName: String
+    var teamName: String
+    var position: String
+}
+struct SeasonLeader: Codable, Equatable {
+    var category: String
+    var playerName: String
+    var teamName: String
+    var perGame: Double
+    var valueText: String
+}
+
+// MARK: - 进行中的赛季（对战表先生成，逐场打，可随时暂停看排名）
+// playoffRound：0=常规赛进行中，1=季后赛首轮待确认，2=分区半决赛待确认，3=分区决赛待确认，4=总决赛待确认，5=已完成（此时已转快照，ongoing 会被清空）。
+struct ScheduledGame: Codable, Equatable, Identifiable {
+    var id: UUID
+    var index: Int
+    var homeTeamId: UUID
+    var awayTeamId: UUID
+    var playedGameId: UUID? = nil
+}
+struct OngoingSeason: Codable, Equatable, Identifiable {
+    var id: UUID
+    var seasonNumber: Int
+    var seed: Int64
+    var settings: LeagueSettings
+    var schedule: [ScheduledGame]
+    var playedGames: [Game] = []
+    var playoffGames: [Game] = []
+    var playoffSeries: [PlayoffSeries] = []
+    var playoffRound: Int = 0
+    var restCounts: [String: Int] = [:]
+}
+
 // MARK: - 赛季快照（赛季结束自动冻结）
 // 快照是值类型深拷贝：球队名、球员名、比分、统计全部存进快照，
 // 之后在球队/球员编辑器里怎么改，都不会改写已经跑完的赛季。
@@ -305,7 +376,7 @@ struct PlayoffSeries: Codable, Identifiable, Equatable {
 // playoff* 与 champion* 都是新增字段（默认空）：老快照解码时补空，
 // 老赛季打开就是“无季后赛”，不会读坏、不用迁移。
 struct SeasonSnapshot: Codable, Identifiable, Equatable {
-    enum CodingKeys: String, CodingKey { case id, seasonNumber, seed, settings, games, teamStats, playerStats, playoffGames, playoffSeries, championTeamId, championTeamName, createdAt }
+    enum CodingKeys: String, CodingKey { case id, seasonNumber, seed, settings, games, teamStats, playerStats, playoffGames, playoffSeries, championTeamId, championTeamName, createdAt, awards, allNBAFirst, allNBASecond, allNBAThird, seasonLeaders, playoffPlayerStats }
     var id: UUID
     var seasonNumber: Int
     var seed: Int64
@@ -317,19 +388,26 @@ struct SeasonSnapshot: Codable, Identifiable, Equatable {
     var playoffSeries: [PlayoffSeries] = []
     var championTeamId: UUID? = nil
     var championTeamName: String? = nil
+    var awards: [SeasonAward] = []
+    var allNBAFirst: [AllNBAEntry] = []
+    var allNBASecond: [AllNBAEntry] = []
+    var allNBAThird: [AllNBAEntry] = []
+    var seasonLeaders: [SeasonLeader] = []
+    var playoffPlayerStats: [PlayerSeasonStat] = []
     var createdAt: Date
 }
 
 // MARK: - 联赛（一个存档 = 一个 League）
 // 存档文件只含这一个对象；存档之间除了名字没有任何共享数据。
 struct League: Codable, Identifiable, Equatable {
-    enum CodingKeys: String, CodingKey { case id, name, teams, settings, seasons, nextSeasonNumber, createdAt, updatedAt }
+    enum CodingKeys: String, CodingKey { case id, name, teams, settings, seasons, nextSeasonNumber, createdAt, updatedAt, ongoingSeason }
     var id: UUID
     var name: String
     var teams: [Team]
     var settings: LeagueSettings
     var seasons: [SeasonSnapshot]
     var nextSeasonNumber: Int
+    var ongoingSeason: OngoingSeason? = nil
     var createdAt: Date
     var updatedAt: Date
 
@@ -421,6 +499,7 @@ extension Player {
         weightKg = try c.decodeIfPresent(Int.self, forKey: .weightKg) ?? 90
         attributes = try c.decodeIfPresent(Attributes.self, forKey: .attributes) ?? Attributes()
         overallOverride = try c.decodeIfPresent(Int.self, forKey: .overallOverride)
+        honors = try c.decodeIfPresent([PlayerHonor].self, forKey: .honors) ?? []
     }
 }
 
@@ -484,6 +563,7 @@ extension PlayerGameStat {
         threeAttempted = try c.decodeIfPresent(Int.self, forKey: .threeAttempted) ?? 0
         freeThrowsMade = try c.decodeIfPresent(Int.self, forKey: .freeThrowsMade) ?? 0
         freeThrowsAttempted = try c.decodeIfPresent(Int.self, forKey: .freeThrowsAttempted) ?? 0
+        fouls = try c.decodeIfPresent(Int.self, forKey: .fouls) ?? 0
     }
 }
 
@@ -536,6 +616,8 @@ extension PlayerSeasonStat {
         totalThreeAttempted = try c.decodeIfPresent(Int.self, forKey: .totalThreeAttempted) ?? 0
         totalFreeThrowsMade = try c.decodeIfPresent(Int.self, forKey: .totalFreeThrowsMade) ?? 0
         totalFreeThrowsAttempted = try c.decodeIfPresent(Int.self, forKey: .totalFreeThrowsAttempted) ?? 0
+        totalFouls = try c.decodeIfPresent(Int.self, forKey: .totalFouls) ?? 0
+        position = try c.decodeIfPresent(String.self, forKey: .position) ?? ""
     }
 }
 
@@ -554,6 +636,12 @@ extension SeasonSnapshot {
         championTeamId = try c.decodeIfPresent(UUID.self, forKey: .championTeamId)
         championTeamName = try c.decodeIfPresent(String.self, forKey: .championTeamName)
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        awards = try c.decodeIfPresent([SeasonAward].self, forKey: .awards) ?? []
+        allNBAFirst = try c.decodeIfPresent([AllNBAEntry].self, forKey: .allNBAFirst) ?? []
+        allNBASecond = try c.decodeIfPresent([AllNBAEntry].self, forKey: .allNBASecond) ?? []
+        allNBAThird = try c.decodeIfPresent([AllNBAEntry].self, forKey: .allNBAThird) ?? []
+        seasonLeaders = try c.decodeIfPresent([SeasonLeader].self, forKey: .seasonLeaders) ?? []
+        playoffPlayerStats = try c.decodeIfPresent([PlayerSeasonStat].self, forKey: .playoffPlayerStats) ?? []
     }
 }
 
@@ -566,6 +654,7 @@ extension League {
         settings = try c.decodeIfPresent(LeagueSettings.self, forKey: .settings) ?? LeagueSettings()
         seasons = try c.decodeIfPresent([SeasonSnapshot].self, forKey: .seasons) ?? []
         nextSeasonNumber = try c.decodeIfPresent(Int.self, forKey: .nextSeasonNumber) ?? 1
+        ongoingSeason = try c.decodeIfPresent(OngoingSeason.self, forKey: .ongoingSeason)
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
     }
