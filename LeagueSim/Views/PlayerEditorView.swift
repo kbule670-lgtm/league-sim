@@ -31,16 +31,42 @@ struct PlayerEditorView: View {
         NavigationStack {
             Form {
                 Section("基本信息") {
-                    TextField("姓名", text: $name)
-                    TextField("球衣号", text: $jerseyText).keyboardType(.numberPad)
+                    // 标签必须写死在左边：原来只靠 TextField 的占位标签，
+                    // 填上数字后标签就没了，25/195/90 是啥根本看不出来。
+                    HStack {
+                        Text("姓名")
+                        TextField("", text: $name)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    HStack {
+                        Text("球衣号")
+                        TextField("", text: $jerseyText)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                    }
                     Picker("位置", selection: $position) {
                         ForEach(Position.allCases) { item in
                             Text(item.name).tag(item)
                         }
                     }
-                    TextField("年龄", text: $ageText).keyboardType(.numberPad)
-                    TextField("身高（厘米）", text: $heightText).keyboardType(.numberPad)
-                    TextField("体重（公斤）", text: $weightText).keyboardType(.numberPad)
+                    HStack {
+                        Text("年龄（岁）")
+                        TextField("", text: $ageText)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    HStack {
+                        Text("身高（厘米）")
+                        TextField("", text: $heightText)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    HStack {
+                        Text("体重（公斤）")
+                        TextField("", text: $weightText)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                    }
                     Picker("名单状态", selection: $status) {
                         ForEach(RosterStatus.allCases) { item in
                             Text(item.rawValue).tag(item)
@@ -59,6 +85,17 @@ struct PlayerEditorView: View {
                     }
                     Text("当前显示总评：\(Rating.overall(for: previewPlayer))（潜力不计入当前总评）")
                         .font(.footnote).foregroundStyle(.secondary)
+                }
+                if let slot {
+                    Section("各赛季历史数据") {
+                        NavigationLink {
+                            PlayerHistoryView(playerId: slot.player.id, playerName: slot.player.name)
+                        } label: {
+                            Text("查看 \(slot.player.name) 各赛季数据")
+                        }
+                        Text("按赛季列：球队、场次、场均分板助、投篮三分罚球命中率；数据来自已跑完的赛季快照，之后改名改队不改写历史。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
                 Section("分项能力（0-99）") {
                     AttributeSlider(label: "三分", value: binding(\.threePoint))
@@ -131,22 +168,32 @@ struct PlayerEditorView: View {
     }
 }
 
-// 0-99 滑杆 + 数字：滑杆步进 1，数字一眼看得出。
+// 0-99 键盘输入，不用滑块：用户反馈拖滑块改数太费劲，直接敲数字。
+// 文本框用本地 text 状态 + 焦点守门：正在输入时不把 value 写回 text，
+// 这样清空重输不会被立刻弹回 0；失焦后才按 value 同步一次，输入始终钳制 0-99。
 private struct AttributeSlider: View {
     var label: String
     @Binding var value: Int
+    @State private var text = ""
+    @FocusState private var focused: Bool
 
     var body: some View {
-        VStack(alignment: .leading) {
-            HStack {
-                Text(label)
-                Spacer()
-                Text("\(value)").monospacedDigit()
-            }
-            Slider(value: Binding(
-                get: { Double(value) },
-                set: { value = Int($0) }
-            ), in: 0...99, step: 1)
+        HStack {
+            Text(label)
+            Spacer()
+            TextField("", text: $text)
+                .keyboardType(.numberPad)
+                .multilineTextAlignment(.trailing)
+                .focused($focused)
+                .frame(width: 80)
+        }
+        .onAppear { text = "\(value)" }
+        // 单参数 onChange：iOS 16 写法，双参数是 iOS 17 才有的。
+        .onChange(of: text) { _ in
+            value = min(99, max(0, Int(text) ?? 0))
+        }
+        .onChange(of: value) { _ in
+            if !focused { text = "\(value)" }
         }
     }
 }

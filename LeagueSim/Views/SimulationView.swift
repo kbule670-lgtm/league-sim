@@ -150,11 +150,15 @@ struct HistoryView: View {
                             }
                         }
                         if let champion = season.championTeamName {
-                            Section("季后赛") {
+                            Section("季后赛（点进一轮看各场比赛）") {
                                 Text("总冠军：\(champion)")
                                 ForEach(season.playoffSeries) { series in
-                                    Text("\(series.conference)\(series.round)：\(series.higherSeed) 号种子 \(series.higherSeedTeamName) \(series.higherWins):\(series.lowerWins) \(series.lowerSeed) 号种子 \(series.lowerSeedTeamName)")
-                                        .font(.caption)
+                                    NavigationLink {
+                                        PlayoffSeriesDetailView(series: series, season: season)
+                                    } label: {
+                                        Text("\(series.conference)\(series.round)：\(series.higherSeed) 号种子 \(series.higherSeedTeamName) \(series.higherWins):\(series.lowerWins) \(series.lowerSeed) 号种子 \(series.lowerSeedTeamName)")
+                                            .font(.caption)
+                                    }
                                 }
                                 if season.playoffSeries.isEmpty {
                                     Text("季后赛数据为空").font(.caption).foregroundStyle(.secondary)
@@ -192,6 +196,16 @@ struct HistoryView: View {
                                                 stat.pointsPerGame, stat.reboundsPerGame,
                                                 stat.assistsPerGame, stat.games))
                                         .font(.caption).foregroundStyle(.secondary)
+                                    if stat.totalFieldGoalsAttempted > 0 || stat.totalFreeThrowsAttempted > 0 {
+                                        Text(String(format: "投篮 %d中%d（%.1f%%）· 三分 %d中%d（%.1f%%）· 罚球 %d中%d（%.1f%%）",
+                                                    stat.totalFieldGoalsMade, stat.totalFieldGoalsAttempted,
+                                                    stat.fieldGoalPercentage * 100,
+                                                    stat.totalThreeMade, stat.totalThreeAttempted,
+                                                    stat.threePercentage * 100,
+                                                    stat.totalFreeThrowsMade, stat.totalFreeThrowsAttempted,
+                                                    stat.freeThrowPercentage * 100))
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
                                 }
                             }
                         }
@@ -220,6 +234,44 @@ struct HistoryView: View {
             }
             .navigationTitle("历史快照")
         }
+    }
+}
+
+// 季后赛系列赛详情：点进一轮，先看这轮的各场比赛比分，再点进单场看 box 与播报。
+// 以前系列赛那行只是纯文字点不动，各场比赛又混在 105 场的长列表里难找，
+// 现在按系列赛分组，gameIds 的顺序就是比赛顺序。
+private struct PlayoffSeriesDetailView: View {
+    var series: PlayoffSeries
+    var season: SeasonSnapshot
+
+    private var games: [Game] {
+        series.gameIds.compactMap { id in
+            season.playoffGames.first { $0.id == id }
+        }
+    }
+
+    var body: some View {
+        List {
+            Section("\(series.conference)\(series.round)") {
+                Text("\(series.higherSeed) 号种子 \(series.higherSeedTeamName) \(series.higherWins):\(series.lowerWins) \(series.lowerSeed) 号种子 \(series.lowerSeedTeamName)")
+                Text("胜者：\(series.winnerTeamName)")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("各场比赛（点进去看 box，里面有虚拟播报）") {
+                if games.isEmpty {
+                    Text("本轮没有单场数据").foregroundStyle(.secondary)
+                } else {
+                    ForEach(games) { game in
+                        NavigationLink {
+                            GameDetailView(game: game, seasonSeed: season.seed)
+                        } label: {
+                            Text("\(game.homeTeamName) \(game.homeScore) : \(game.awayScore) \(game.awayTeamName)")
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("\(series.conference)\(series.round)")
     }
 }
 
@@ -257,6 +309,10 @@ private struct GameDetailView: View {
             Text(stat.playerName)
             Text("\(stat.minutes) 分钟 · \(stat.points) 分 · \(stat.rebounds) 板 · \(stat.assists) 助 · \(stat.steals) 断 · \(stat.blocks) 帽")
                 .font(.caption).foregroundStyle(.secondary)
+            if stat.fieldGoalsAttempted > 0 || stat.freeThrowsAttempted > 0 {
+                Text("投篮 \(stat.fieldGoalsMade)中\(stat.fieldGoalsAttempted) · 三分 \(stat.threeMade)中\(stat.threeAttempted) · 罚球 \(stat.freeThrowsMade)中\(stat.freeThrowsAttempted)")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 }
