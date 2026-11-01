@@ -51,10 +51,41 @@ enum ArchiveStore {
     }
 
     static func loadLeague(id: UUID) -> League? {
+        if case .success(let league) = loadLeagueResult(id: id) { return league }
+        return nil
+    }
+
+    // 进存档失败不再静默：返回具体解码错误，界面直接弹出来，免得“点了没反应”。
+    // 容错顺序：先标准 iso8601，再带毫秒的 iso8601，最后默认时间戳解码；
+    // 老存档不管是哪种日期写法，只要 JSON 结构对得上都能读回来。
+    static func loadLeagueResult(id: UUID) -> Result<League, Error> {
         let url = archiveDir(for: id).appendingPathComponent("league.json", isDirectory: false)
-        guard let data = try? Data(contentsOf: url),
-              let league = try? decoder().decode(League.self, from: data) else { return nil }
-        return league
+        guard let data = try? Data(contentsOf: url) else {
+            return .failure(NSError(domain: "LeagueSim", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "存档文件 league.json 找不到"]))
+        }
+        var lastError: Error?
+        var decoders: [JSONDecoder] = [decoder()]
+        let fractional = JSONDecoder()
+        fractional.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let text = try container.decode(String.self)
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = formatter.date(from: text) { return date }
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "日期解析失败：\(text)")
+        }
+        decoders.append(fractional)
+        decoders.append(JSONDecoder())
+        for dec in decoders {
+            do {
+                return .success(try dec.decode(League.self, from: data))
+            } catch {
+                lastError = error
+            }
+        }
+        return .failure(lastError ?? NSError(domain: "LeagueSim", code: 2,
+            userInfo: [NSLocalizedDescriptionKey: "存档解码失败"]))
     }
 
     // 保存：先写 league.json 再写 meta.json；失败不抛错，界面按返回值提示。
