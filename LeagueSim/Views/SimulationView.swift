@@ -66,8 +66,8 @@ struct SimulationView: View {
                 Button("放弃", role: .destructive) { store.discardOngoingSeason() }
             } message: { Text("对战表和已打的比赛都会丢掉，已跑完的赛季快照不受影响。") }
             .alert("这场怎么打", isPresented: $showingGameAction) {
-                Button("模拟到该场") { if let id = selectedScheduledId { store.simulateRegularGamesUpTo(id: id) } }
-                Button("只模拟该场") { if let id = selectedScheduledId { store.simulateRegularGame(id: id) } }
+                Button("模拟到该场") { if let id = selectedScheduledId { store.simulateRegularGamesUpTo(scheduledId: id) } }
+                Button("只模拟该场") { if let id = selectedScheduledId { store.simulateRegularGame(scheduledId: id) } }
                 Button("取消", role: .cancel) {}
             } message: { Text("“模拟到该场”是把这场之前的未打场次连这场一起打完；“只模拟该场”是只打这一场，之前的场次留着以后打，排名按已打场次算。") }
         }
