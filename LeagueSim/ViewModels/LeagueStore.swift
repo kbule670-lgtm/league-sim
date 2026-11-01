@@ -447,7 +447,7 @@ final class LeagueStore: ObservableObject {
                     let (higher, lower) = seedOf(winners[0], in: standings) <= seedOf(winners[1], in: standings) ? (winners[0], winners[1]) : (winners[1], winners[0])
                     let result = SimulationEngine.playSeriesWithPlaying(higher: higher, higherSeed: seedOf(higher, in: standings), lower: lower, lowerSeed: seedOf(lower, in: standings), round: roundName, conferenceName: conferenceName, ratings: ratings, leagueAverage: avg, settings: ongoing.settings, rng: &rng, restCounts: &rest)
                     seriesOut.append(result.series); gamesOut.append(contentsOf: result.games)
-                    return result.winner
+                    return (seriesOut, gamesOut, result.winner)
                 }
                 return (seriesOut, gamesOut, seeds[0])
             }
