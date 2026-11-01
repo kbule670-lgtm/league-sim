@@ -273,4 +273,250 @@ final class LeagueStore: ObservableObject {
         save(league)
         return (result.snapshot, result.skippedTeams)
     }
+
+    // MARK: - 存档复制
+    func copyArchive(id: UUID) {
+        guard var league = ArchiveStore.loadLeague(id: id) else { return }
+        league.id = UUID()
+        league.name = league.name + " 副本"
+        league.ongoingSeason = nil
+        let now = Date()
+        league.createdAt = now
+        league.updatedAt = now
+        _ = ArchiveStore.saveLeague(league)
+        refreshArchives()
+    }
+
+    // MARK: - 多选交易（转出、转入都可多选，互换后球衣不冲突才成交）
+    func tradePlayersMulti(from fromTeamId: UUID, outPlayerIds: [UUID], to toTeamId: UUID, inPlayerIds: [UUID]) -> Bool {
+        guard fromTeamId != toTeamId else { return false }
+        var success = false
+        updateCurrent { league in
+            guard let fromIndex = league.teams.firstIndex(where: { $0.id == fromTeamId }),
+                  let toIndex = league.teams.firstIndex(where: { $0.id == toTeamId }) else { return }
+            let outSlots = league.teams[fromIndex].roster.filter { outPlayerIds.contains($0.player.id) }
+            let inSlots = league.teams[toIndex].roster.filter { inPlayerIds.contains($0.player.id) }
+            guard outSlots.count == outPlayerIds.count, inSlots.count == inPlayerIds.count else { return }
+            // 互换后校验：去掉换出的人、加上换入的人，队内不能有重复球衣号或重复球员。
+            func check(teamRoster: [RosterSlot], removeIds: [UUID], addSlots: [RosterSlot]) -> Bool {
+                let remaining = teamRoster.filter { !removeIds.contains($0.player.id) }
+                let combined = remaining + addSlots
+                let jerseys = combined.map { $0.player.jerseyNumber }
+                let ids = combined.map { $0.player.id }
+                return Set(jerseys).count == jerseys.count && Set(ids).count == ids.count
+            }
+            guard check(teamRoster: league.teams[fromIndex].roster, removeIds: outPlayerIds, addSlots: inSlots) else { return }
+            guard check(teamRoster: league.teams[toIndex].roster, removeIds: inPlayerIds, addSlots: outSlots) else { return }
+            league.teams[fromIndex].roster.removeAll { outPlayerIds.contains($0.player.id) }
+            league.teams[toIndex].roster.removeAll { inPlayerIds.contains($0.player.id) }
+            let fromNext = (league.teams[fromIndex].roster.map { $0.rotationOrder }.max() ?? 0) + 1
+            let toNext = (league.teams[toIndex].roster.map { $0.rotationOrder }.max() ?? 0) + 1
+            for (i, var slot) in inSlots.enumerated() { slot.rotationOrder = fromNext + i; league.teams[fromIndex].roster.append(slot) }
+            for (i, var slot) in outSlots.enumerated() { slot.rotationOrder = toNext + i; league.teams[toIndex].roster.append(slot) }
+            success = true
+        }
+        return success
+    }
+
+    // MARK: - 进行中的赛季
+    private func ratingsForOngoing(_ league: League, participants: [Team]) -> ([UUID: Double], Double) {
+        let ratings = Dictionary(uniqueKeysWithValues: participants.map { ($0.id, SimulationEngine.teamRating(for: $0, settings: league.ongoingSeason?.settings ?? league.settings)) })
+        let avg = participants.isEmpty ? 0 : ratings.values.reduce(0, +) / Double(participants.count)
+        return (ratings, avg)
+    }
+
+    func startOngoingSeason(seed: Int64) -> Bool {
+        guard var league = currentLeague, league.ongoingSeason == nil else { return false }
+        let participants = league.teams.filter { $0.activeRoster.count >= 5 }
+        guard participants.count >= 2 else { return false }
+        var settings = league.settings
+        settings.lastSeed = seed
+        league.settings = settings
+        let pairs = SimulationEngine.regularSeasonSchedule(participants: participants)
+        let schedule = pairs.enumerated().map { ScheduledGame(id: UUID(), index: $0.offset, homeTeamId: $0.element.home.id, awayTeamId: $0.element.away.id, playedGameId: nil) }
+        league.ongoingSeason = OngoingSeason(id: UUID(), seasonNumber: league.nextSeasonNumber, seed: seed, settings: settings, schedule: schedule, playedGames: [], playoffGames: [], playoffSeries: [], playoffRound: 0, restCounts: [:])
+        league.updatedAt = Date()
+        currentLeague = league
+        save(league)
+        return true
+    }
+
+    func discardOngoingSeason() {
+        updateCurrent { league in league.ongoingSeason = nil }
+    }
+
+    private func playRegularScheduled(_ league: inout League, scheduled: ScheduledGame) {
+        guard var ongoing = league.ongoingSeason else { return }
+        guard let home = league.teams.first(where: { $0.id == scheduled.homeTeamId }),
+              let away = league.teams.first(where: { $0.id == scheduled.awayTeamId }) else { return }
+        guard !home.activeRoster.isEmpty && !away.activeRoster.isEmpty else { return }
+        let participants = league.teams.filter { $0.activeRoster.count >= 5 }
+        let (ratings, avg) = ratingsForOngoing(league, participants: participants)
+        var rng = SeededRandom(seed: ongoing.seed &+ Int64(scheduled.index + 1) * 1000003)
+        var rest = ongoing.restCounts
+        let game = SimulationEngine.playSingleGame(home: home, away: away, ratings: ratings, leagueAverage: avg, settings: ongoing.settings, isPlayoff: false, restCounts: &rest, rng: &rng)
+        ongoing.restCounts = rest
+        ongoing.playedGames.append(game)
+        if let idx = ongoing.schedule.firstIndex(where: { $0.id == scheduled.id }) { ongoing.schedule[idx].playedGameId = game.id }
+        league.ongoingSeason = ongoing
+    }
+
+    func simulateRegularGame(scheduledId: UUID) {
+        updateCurrent { league in
+            guard let ongoing = league.ongoingSeason,
+                  let scheduled = ongoing.schedule.first(where: { $0.id == scheduledId && $0.playedGameId == nil }) else { return }
+            playRegularScheduled(&league, scheduled: scheduled)
+        }
+    }
+
+    func simulateRegularGamesUpTo(scheduledId: UUID) {
+        updateCurrent { league in
+            guard let ongoing = league.ongoingSeason,
+                  let target = ongoing.schedule.first(where: { $0.id == scheduledId }) else { return }
+            let targets = ongoing.schedule.filter { $0.index <= target.index && $0.playedGameId == nil }.sorted { $0.index < $1.index }
+            for scheduled in targets { playRegularScheduled(&league, scheduled: scheduled) }
+        }
+    }
+
+    func simulateAllRegular() {
+        updateCurrent { league in
+            guard let ongoing = league.ongoingSeason else { return }
+            let targets = ongoing.schedule.filter { $0.playedGameId == nil }.sorted { $0.index < $1.index }
+            for scheduled in targets { playRegularScheduled(&league, scheduled: scheduled) }
+            // 常规赛打完后，季后赛进入“待确认首轮”状态，不自动开打。
+            if let updated = league.ongoingSeason, updated.schedule.allSatisfy({ $0.playedGameId != nil }) {
+                var copy = updated; copy.playoffRound = 1; league.ongoingSeason = copy
+            }
+        }
+    }
+
+    func simulateNextRegularGame() {
+        updateCurrent { league in
+            guard let ongoing = league.ongoingSeason,
+                  let next = ongoing.schedule.filter({ $0.playedGameId == nil }).sorted(by: { $0.index < $1.index }).first else { return }
+            playRegularScheduled(&league, scheduled: next)
+            if let updated = league.ongoingSeason, updated.schedule.allSatisfy({ $0.playedGameId != nil }) {
+                var copy = updated; copy.playoffRound = 1; league.ongoingSeason = copy
+            }
+        }
+    }
+
+    // 季后赛逐轮确认：每轮打完停下来，等用户点下一轮。总决赛打完直接结算赛季。
+    func playNextPlayoffRound() {
+        updateCurrent { league in
+            guard var ongoing = league.ongoingSeason, ongoing.playoffRound >= 1, ongoing.playoffRound <= 4 else { return }
+            let participants = league.teams.filter { $0.activeRoster.count >= 5 }
+            let regularStats = SimulationEngine.aggregateTeamStats(games: ongoing.playedGames, participants: participants)
+            let eastStandings = SimulationEngine.sortedStandings(participants: participants.filter { SimulationEngine.conference(for: $0, in: participants) == .east }, teamStats: regularStats)
+            let westStandings = SimulationEngine.sortedStandings(participants: participants.filter { SimulationEngine.conference(for: $0, in: participants) == .west }, teamStats: regularStats)
+            guard eastStandings.count >= 8 && westStandings.count >= 8 else { return }
+            let (ratings, avg) = ratingsForOngoing(league, participants: participants)
+            var rng = SeededRandom(seed: ongoing.seed &+ Int64(ongoing.playoffRound + 100) * 1000003)
+            var rest = ongoing.restCounts
+            let round = ongoing.playoffRound
+            let roundName = SimulationEngine.playoffRoundName(round)
+            func seedOf(_ team: Team, in standings: [Team]) -> Int { (standings.firstIndex(where: { $0.id == team.id }) ?? 0) + 1 }
+            func playConference(standings: [Team], conferenceName: String) -> (series: [PlayoffSeries], games: [Game], winner: Team) {
+                var seriesOut: [PlayoffSeries] = []; var gamesOut: [Game] = []
+                let seeds = Array(standings.prefix(8))
+                if round == 1 {
+                    var winners: [Team] = []
+                    for (hi, li) in [(0, 7), (3, 4), (2, 5), (1, 6)] {
+                        let result = SimulationEngine.playSeriesWithPlaying(higher: seeds[hi], higherSeed: hi + 1, lower: seeds[li], lowerSeed: li + 1, round: roundName, conferenceName: conferenceName, ratings: ratings, leagueAverage: avg, settings: ongoing.settings, rng: &rng, restCounts: &rest)
+                        seriesOut.append(result.series); gamesOut.append(contentsOf: result.games); winners.append(result.winner)
+                    }
+                    return (seriesOut, gamesOut, winners.first ?? seeds[0])
+                } else if round == 2 {
+                    let firstRound = ongoing.playoffSeries.filter { $0.round == "首轮" && $0.conference == conferenceName }
+                    guard firstRound.count == 4 else { return (seriesOut, gamesOut, seeds[0]) }
+                    let winners = firstRound.compactMap { series in standings.first(where: { $0.id == series.winnerTeamId }) }
+                    guard winners.count == 4 else { return (seriesOut, gamesOut, seeds[0]) }
+                    var semiWinners: [Team] = []
+                    for (a, b) in [(0, 1), (2, 3)] {
+                        let first = winners[a]; let second = winners[b]
+                        let (higher, lower) = seedOf(first, in: standings) <= seedOf(second, in: standings) ? (first, second) : (second, first)
+                        let result = SimulationEngine.playSeriesWithPlaying(higher: higher, higherSeed: seedOf(higher, in: standings), lower: lower, lowerSeed: seedOf(lower, in: standings), round: roundName, conferenceName: conferenceName, ratings: ratings, leagueAverage: avg, settings: ongoing.settings, rng: &rng, restCounts: &rest)
+                        seriesOut.append(result.series); gamesOut.append(contentsOf: result.games); semiWinners.append(result.winner)
+                    }
+                    return (seriesOut, gamesOut, semiWinners.first ?? seeds[0])
+                } else if round == 3 {
+                    let semis = ongoing.playoffSeries.filter { $0.round == "分区半决赛" && $0.conference == conferenceName }
+                    guard semis.count == 2 else { return (seriesOut, gamesOut, seeds[0]) }
+                    let winners = semis.compactMap { series in standings.first(where: { $0.id == series.winnerTeamId }) }
+                    guard winners.count == 2 else { return (seriesOut, gamesOut, seeds[0]) }
+                    let (higher, lower) = seedOf(winners[0], in: standings) <= seedOf(winners[1], in: standings) ? (winners[0], winners[1]) : (winners[1], winners[0])
+                    let result = SimulationEngine.playSeriesWithPlaying(higher: higher, higherSeed: seedOf(higher, in: standings), lower: lower, lowerSeed: seedOf(lower, in: standings), round: roundName, conferenceName: conferenceName, ratings: ratings, leagueAverage: avg, settings: ongoing.settings, rng: &rng, restCounts: &rest)
+                    seriesOut.append(result.series); gamesOut.append(contentsOf: result.games)
+                    return result.winner
+                }
+                return (seriesOut, gamesOut, seeds[0])
+            }
+            if round < 4 {
+                let eastResult = playConference(standings: eastStandings, conferenceName: "东部")
+                ongoing.playoffSeries.append(contentsOf: eastResult.series); ongoing.playoffGames.append(contentsOf: eastResult.games)
+                let westResult = playConference(standings: westStandings, conferenceName: "西部")
+                ongoing.playoffSeries.append(contentsOf: westResult.series); ongoing.playoffGames.append(contentsOf: westResult.games)
+                ongoing.restCounts = rest
+                ongoing.playoffRound = round + 1
+                league.ongoingSeason = ongoing
+            } else {
+                // 总决赛
+                let eastFinals = ongoing.playoffSeries.filter { $0.round == "分区决赛" && $0.conference == "东部" }.last
+                let westFinals = ongoing.playoffSeries.filter { $0.round == "分区决赛" && $0.conference == "西部" }.last
+                guard let eastId = eastFinals?.winnerTeamId, let westId = westFinals?.winnerTeamId,
+                      let eastChampion = league.teams.first(where: { $0.id == eastId }),
+                      let westChampion = league.teams.first(where: { $0.id == westId }) else { return }
+                let eastWins = regularStats.first(where: { $0.teamId == eastId })?.wins ?? 0
+                let westWins = regularStats.first(where: { $0.teamId == westId })?.wins ?? 0
+                let eastDiff = regularStats.first(where: { $0.teamId == eastId })?.pointDiff ?? 0
+                let westDiff = regularStats.first(where: { $0.teamId == westId })?.pointDiff ?? 0
+                let eastIsHigher = eastWins > westWins || (eastWins == westWins && eastDiff >= westDiff)
+                let higher = eastIsHigher ? eastChampion : westChampion
+                let lower = eastIsHigher ? westChampion : eastChampion
+                let higherSeed = eastIsHigher ? seedOf(eastChampion, in: eastStandings) : seedOf(westChampion, in: westStandings)
+                let lowerSeed = eastIsHigher ? seedOf(westChampion, in: westStandings) : seedOf(eastChampion, in: eastStandings)
+                let finals = SimulationEngine.playSeriesWithPlaying(higher: higher, higherSeed: higherSeed, lower: lower, lowerSeed: lowerSeed, round: roundName, conferenceName: "总决赛", ratings: ratings, leagueAverage: avg, settings: ongoing.settings, rng: &rng, restCounts: &rest)
+                ongoing.playoffSeries.append(finals.series); ongoing.playoffGames.append(contentsOf: finals.games); ongoing.restCounts = rest
+                league.ongoingSeason = ongoing
+                finishOngoingSeason(&league)
+            }
+        }
+    }
+
+    private func finishOngoingSeason(_ league: inout League) {
+        guard let ongoing = league.ongoingSeason else { return }
+        let participants = league.teams.filter { $0.activeRoster.count >= 5 }
+        let snapshotId = UUID()
+        let regularTeamStats = SimulationEngine.aggregateTeamStats(games: ongoing.playedGames, participants: participants)
+        var positionMap: [UUID: String] = [:]
+        for team in league.teams { for slot in team.roster { positionMap[slot.player.id] = slot.player.position.rawValue } }
+        let regularPlayerStats = SimulationEngine.aggregatePlayerStats(games: ongoing.playedGames, seasonId: snapshotId, positionMap: positionMap)
+        let finalsGames = ongoing.playoffGames.filter { game in
+            guard let series = ongoing.playoffSeries.last(where: { $0.round == "总决赛" }) else { return false }
+            return series.gameIds.contains(game.id)
+        }
+        let computed = SimulationEngine.computeAwards(regularPlayerStats: regularPlayerStats, regularTeamStats: regularTeamStats, playoffGames: ongoing.playoffGames, finalsGames: finalsGames, snapshotId: snapshotId, positionMap: positionMap)
+        let championId = ongoing.playoffSeries.last(where: { $0.round == "总决赛" })?.winnerTeamId
+        let championName = ongoing.playoffSeries.last(where: { $0.round == "总决赛" })?.winnerTeamName
+        let snapshot = SeasonSnapshot(id: snapshotId, seasonNumber: ongoing.seasonNumber, seed: ongoing.seed, settings: ongoing.settings, games: ongoing.playedGames, teamStats: regularTeamStats, playerStats: regularPlayerStats, playoffGames: ongoing.playoffGames, playoffSeries: ongoing.playoffSeries, championTeamId: championId, championTeamName: championName, createdAt: Date())
+        var snap = snapshot
+        snap.awards = computed.awards; snap.allNBAFirst = computed.first; snap.allNBASecond = computed.second; snap.allNBAThird = computed.third; snap.seasonLeaders = computed.leaders; snap.playoffPlayerStats = computed.playoffPlayerStats
+        league.seasons.append(snap)
+        // 荣誉记入当前名单：奖项得主、FMVP、冠军队全员。
+        for award in computed.awards {
+            guard let pid = award.playerId else { continue }
+            for ti in league.teams.indices { for si in league.teams[ti].roster.indices where league.teams[ti].roster[si].player.id == pid {
+                league.teams[ti].roster[si].player.honors.append(PlayerHonor(type: award.title, seasonNumber: ongoing.seasonNumber, teamName: award.teamName, detail: award.valueText))
+            } }
+        }
+        if let cid = championId, let cname = championName {
+            for ti in league.teams.indices where league.teams[ti].id == cid { for si in league.teams[ti].roster.indices {
+                league.teams[ti].roster[si].player.honors.append(PlayerHonor(type: "总冠军", seasonNumber: ongoing.seasonNumber, teamName: cname, detail: "第 \(ongoing.seasonNumber) 赛季"))
+            } }
+        }
+        league.ongoingSeason = nil
+        league.nextSeasonNumber += 1
+        league.updatedAt = Date()
+    }
+
 }
