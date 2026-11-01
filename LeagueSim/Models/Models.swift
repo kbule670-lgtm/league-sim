@@ -29,6 +29,7 @@ enum Position: String, Codable, CaseIterable, Identifiable {
 // 注意：潜力 potential 只影响未来（P2 成长），不计入当前总评。
 // 投射不是单独一项：三分与中投的均值，在 Rating.swift 里算。
 struct Attributes: Codable, Equatable {
+    enum CodingKeys: String, CodingKey { case threePoint, midRange, finishing, freeThrow, playmaking, rebounding, perimeterDefense, rimProtection, athleticism, basketballIQ, durability, potential }
     var threePoint: Int = 70
     var midRange: Int = 70
     var finishing: Int = 70
@@ -75,6 +76,7 @@ enum RosterStatus: String, Codable, CaseIterable, Identifiable {
 // MARK: - 球员
 // id 只在同一个存档内保证稳定：换存档后 id 不互通，跨存档不要拿 id 对人。
 struct Player: Codable, Identifiable, Equatable {
+    enum CodingKeys: String, CodingKey { case id, name, jerseyNumber, position, age, heightCm, weightKg, attributes, overallOverride }
     var id: UUID
     var name: String
     var jerseyNumber: Int
@@ -103,6 +105,7 @@ struct Player: Codable, Identifiable, Equatable {
 
 // MARK: - 名单槽位：球员 + 在队内的角色与轮换顺序
 struct RosterSlot: Codable, Equatable, Identifiable {
+    enum CodingKeys: String, CodingKey { case player, status, rotationOrder }
     // ForEach 直接用名单槽位时，SwiftUI 要一个稳定 id：就用球员 id，
     // 同一球员在同一队里只会出现一次，不会撞。
     var id: UUID { player.id }
@@ -130,6 +133,7 @@ enum Conference: String, Codable, CaseIterable, Identifiable {
 // conference 是新增字段（默认未定）：老存档 JSON 里没有这个键时，
 // 带默认值的 Codable 解码会用未定补上，不会把老存档读坏。
 struct Team: Codable, Identifiable, Equatable {
+    enum CodingKeys: String, CodingKey { case id, name, abbreviation, division, conference, arena, colorHex, roster }
     var id: UUID
     var name: String
     var abbreviation: String
@@ -159,6 +163,7 @@ struct Team: Codable, Identifiable, Equatable {
 
 // MARK: - 联赛设置（每个存档独立一份）
 struct LeagueSettings: Codable, Equatable {
+    enum CodingKeys: String, CodingKey { case chemistry, coachRating, homeAdvantagePoints, randomVolatility, lastSeed }
     // 球队评分公式里的两项，P0 默认 70，界面可调。
     var chemistry: Int = 70
     var coachRating: Int = 70
@@ -174,6 +179,7 @@ struct LeagueSettings: Codable, Equatable {
 // 老比赛打开就是投篮 0 中 0，不会读坏；新比赛才有真实出手/命中。
 // 约束（引擎保证）：总命中 = 两分命中 + 三分命中；得分 = 两分命中*2 + 三分命中*3 + 罚球命中。
 struct PlayerGameStat: Codable, Equatable {
+    enum CodingKeys: String, CodingKey { case playerId, playerName, teamId, minutes, points, rebounds, assists, steals, blocks, fieldGoalsMade, fieldGoalsAttempted, threeMade, threeAttempted, freeThrowsMade, freeThrowsAttempted }
     var playerId: UUID
     var playerName: String
     var teamId: UUID
@@ -203,6 +209,7 @@ struct PlayerGameStat: Codable, Equatable {
 
 // MARK: - 一场比赛
 struct Game: Codable, Identifiable, Equatable {
+    enum CodingKeys: String, CodingKey { case id, homeTeamId, homeTeamName, awayTeamId, awayTeamName, homeScore, awayScore, boxScore }
     var id: UUID
     var homeTeamId: UUID
     var homeTeamName: String
@@ -217,6 +224,7 @@ struct Game: Codable, Identifiable, Equatable {
 // 常规赛统计：季后赛胜负不计入这里，季后赛结果看 playoffSeries。
 // conference 是新增字段（默认空）：老快照里没有它时解码补空，历史页按分区照常看。
 struct TeamSeasonStat: Codable, Identifiable, Equatable {
+    enum CodingKeys: String, CodingKey { case teamId, teamName, division, conference, wins, losses, pointsFor, pointsAgainst }
     var id: UUID { teamId }
     var teamId: UUID
     var teamName: String
@@ -232,6 +240,7 @@ struct TeamSeasonStat: Codable, Identifiable, Equatable {
 // MARK: - 球员赛季统计（累计 + 场均都存，界面直接取，不用现算）
 // 三元组 playerId + seasonId + teamId：赛季快照里存死，之后改名单不污染历史。
 struct PlayerSeasonStat: Codable, Identifiable, Equatable {
+    enum CodingKeys: String, CodingKey { case playerId, playerName, teamId, teamName, seasonId, games, totalPoints, totalRebounds, totalAssists, totalSteals, totalBlocks, totalMinutes, totalFieldGoalsMade, totalFieldGoalsAttempted, totalThreeMade, totalThreeAttempted, totalFreeThrowsMade, totalFreeThrowsAttempted }
     var id: UUID { playerId }
     var playerId: UUID
     var playerName: String
@@ -296,6 +305,7 @@ struct PlayoffSeries: Codable, Identifiable, Equatable {
 // playoff* 与 champion* 都是新增字段（默认空）：老快照解码时补空，
 // 老赛季打开就是“无季后赛”，不会读坏、不用迁移。
 struct SeasonSnapshot: Codable, Identifiable, Equatable {
+    enum CodingKeys: String, CodingKey { case id, seasonNumber, seed, settings, games, teamStats, playerStats, playoffGames, playoffSeries, championTeamId, championTeamName, createdAt }
     var id: UUID
     var seasonNumber: Int
     var seed: Int64
@@ -313,6 +323,7 @@ struct SeasonSnapshot: Codable, Identifiable, Equatable {
 // MARK: - 联赛（一个存档 = 一个 League）
 // 存档文件只含这一个对象；存档之间除了名字没有任何共享数据。
 struct League: Codable, Identifiable, Equatable {
+    enum CodingKeys: String, CodingKey { case id, name, teams, settings, seasons, nextSeasonNumber, createdAt, updatedAt }
     var id: UUID
     var name: String
     var teams: [Team]
@@ -367,5 +378,195 @@ extension Color {
         #else
         return nil
         #endif
+    }
+}
+
+// MARK: - 容错解码（修“进不去：data is missing”）
+// 根因：Swift 合成解码不会用属性默认值补缺失的键，旧存档里没有 5 版新增的
+// 投篮字段、季后赛字段、东西部字段时，解码直接抛 keyNotFound，界面就是“点了没反应”。
+// 现在每个结构都用 decodeIfPresent + 默认值，缺哪个键补哪个，旧存档照常打开；
+// 新存档保存时仍会把全部字段写全，不影响新数据。
+// 注意：这些 init 都写在 extension 里，不会顶掉原有的成员初始化器。
+extension Attributes {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        threePoint = try c.decodeIfPresent(Int.self, forKey: .threePoint) ?? 70
+        midRange = try c.decodeIfPresent(Int.self, forKey: .midRange) ?? 70
+        finishing = try c.decodeIfPresent(Int.self, forKey: .finishing) ?? 70
+        freeThrow = try c.decodeIfPresent(Int.self, forKey: .freeThrow) ?? 70
+        playmaking = try c.decodeIfPresent(Int.self, forKey: .playmaking) ?? 70
+        rebounding = try c.decodeIfPresent(Int.self, forKey: .rebounding) ?? 70
+        perimeterDefense = try c.decodeIfPresent(Int.self, forKey: .perimeterDefense) ?? 70
+        rimProtection = try c.decodeIfPresent(Int.self, forKey: .rimProtection) ?? 70
+        athleticism = try c.decodeIfPresent(Int.self, forKey: .athleticism) ?? 70
+        basketballIQ = try c.decodeIfPresent(Int.self, forKey: .basketballIQ) ?? 70
+        durability = try c.decodeIfPresent(Int.self, forKey: .durability) ?? 70
+        potential = try c.decodeIfPresent(Int.self, forKey: .potential) ?? 70
+    }
+}
+
+extension Player {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        jerseyNumber = try c.decodeIfPresent(Int.self, forKey: .jerseyNumber) ?? 0
+        if let raw = try c.decodeIfPresent(String.self, forKey: .position), let pos = Position(rawValue: raw) {
+            position = pos
+        } else {
+            position = .pg
+        }
+        age = try c.decodeIfPresent(Int.self, forKey: .age) ?? 25
+        heightCm = try c.decodeIfPresent(Int.self, forKey: .heightCm) ?? 195
+        weightKg = try c.decodeIfPresent(Int.self, forKey: .weightKg) ?? 90
+        attributes = try c.decodeIfPresent(Attributes.self, forKey: .attributes) ?? Attributes()
+        overallOverride = try c.decodeIfPresent(Int.self, forKey: .overallOverride)
+    }
+}
+
+extension RosterSlot {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        player = try c.decode(Player.self, forKey: .player)
+        if let raw = try c.decodeIfPresent(String.self, forKey: .status), let st = RosterStatus(rawValue: raw) {
+            status = st
+        } else {
+            status = .bench
+        }
+        rotationOrder = try c.decodeIfPresent(Int.self, forKey: .rotationOrder) ?? 1
+    }
+}
+
+extension Team {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        abbreviation = try c.decodeIfPresent(String.self, forKey: .abbreviation) ?? ""
+        division = try c.decodeIfPresent(String.self, forKey: .division) ?? ""
+        if let raw = try c.decodeIfPresent(String.self, forKey: .conference), let conf = Conference(rawValue: raw) {
+            conference = conf
+        } else {
+            conference = .unknown
+        }
+        arena = try c.decodeIfPresent(String.self, forKey: .arena) ?? ""
+        colorHex = try c.decodeIfPresent(String.self, forKey: .colorHex) ?? "#E86018"
+        roster = try c.decodeIfPresent([RosterSlot].self, forKey: .roster) ?? []
+    }
+}
+
+extension LeagueSettings {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        chemistry = try c.decodeIfPresent(Int.self, forKey: .chemistry) ?? 70
+        coachRating = try c.decodeIfPresent(Int.self, forKey: .coachRating) ?? 70
+        homeAdvantagePoints = try c.decodeIfPresent(Int.self, forKey: .homeAdvantagePoints) ?? 2
+        randomVolatility = try c.decodeIfPresent(Int.self, forKey: .randomVolatility) ?? 12
+        lastSeed = try c.decodeIfPresent(Int64.self, forKey: .lastSeed) ?? 1
+    }
+}
+
+extension PlayerGameStat {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        playerId = try c.decodeIfPresent(UUID.self, forKey: .playerId) ?? UUID()
+        playerName = try c.decodeIfPresent(String.self, forKey: .playerName) ?? ""
+        teamId = try c.decodeIfPresent(UUID.self, forKey: .teamId) ?? UUID()
+        minutes = try c.decodeIfPresent(Int.self, forKey: .minutes) ?? 0
+        points = try c.decodeIfPresent(Int.self, forKey: .points) ?? 0
+        rebounds = try c.decodeIfPresent(Int.self, forKey: .rebounds) ?? 0
+        assists = try c.decodeIfPresent(Int.self, forKey: .assists) ?? 0
+        steals = try c.decodeIfPresent(Int.self, forKey: .steals) ?? 0
+        blocks = try c.decodeIfPresent(Int.self, forKey: .blocks) ?? 0
+        fieldGoalsMade = try c.decodeIfPresent(Int.self, forKey: .fieldGoalsMade) ?? 0
+        fieldGoalsAttempted = try c.decodeIfPresent(Int.self, forKey: .fieldGoalsAttempted) ?? 0
+        threeMade = try c.decodeIfPresent(Int.self, forKey: .threeMade) ?? 0
+        threeAttempted = try c.decodeIfPresent(Int.self, forKey: .threeAttempted) ?? 0
+        freeThrowsMade = try c.decodeIfPresent(Int.self, forKey: .freeThrowsMade) ?? 0
+        freeThrowsAttempted = try c.decodeIfPresent(Int.self, forKey: .freeThrowsAttempted) ?? 0
+    }
+}
+
+extension Game {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        homeTeamId = try c.decodeIfPresent(UUID.self, forKey: .homeTeamId) ?? UUID()
+        homeTeamName = try c.decodeIfPresent(String.self, forKey: .homeTeamName) ?? ""
+        awayTeamId = try c.decodeIfPresent(UUID.self, forKey: .awayTeamId) ?? UUID()
+        awayTeamName = try c.decodeIfPresent(String.self, forKey: .awayTeamName) ?? ""
+        homeScore = try c.decodeIfPresent(Int.self, forKey: .homeScore) ?? 0
+        awayScore = try c.decodeIfPresent(Int.self, forKey: .awayScore) ?? 0
+        boxScore = try c.decodeIfPresent([PlayerGameStat].self, forKey: .boxScore) ?? []
+    }
+}
+
+extension TeamSeasonStat {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        teamId = try c.decodeIfPresent(UUID.self, forKey: .teamId) ?? UUID()
+        teamName = try c.decodeIfPresent(String.self, forKey: .teamName) ?? ""
+        division = try c.decodeIfPresent(String.self, forKey: .division) ?? ""
+        conference = try c.decodeIfPresent(String.self, forKey: .conference) ?? ""
+        wins = try c.decodeIfPresent(Int.self, forKey: .wins) ?? 0
+        losses = try c.decodeIfPresent(Int.self, forKey: .losses) ?? 0
+        pointsFor = try c.decodeIfPresent(Int.self, forKey: .pointsFor) ?? 0
+        pointsAgainst = try c.decodeIfPresent(Int.self, forKey: .pointsAgainst) ?? 0
+    }
+}
+
+extension PlayerSeasonStat {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        playerId = try c.decodeIfPresent(UUID.self, forKey: .playerId) ?? UUID()
+        playerName = try c.decodeIfPresent(String.self, forKey: .playerName) ?? ""
+        teamId = try c.decodeIfPresent(UUID.self, forKey: .teamId) ?? UUID()
+        teamName = try c.decodeIfPresent(String.self, forKey: .teamName) ?? ""
+        seasonId = try c.decodeIfPresent(UUID.self, forKey: .seasonId) ?? UUID()
+        games = try c.decodeIfPresent(Int.self, forKey: .games) ?? 0
+        totalPoints = try c.decodeIfPresent(Int.self, forKey: .totalPoints) ?? 0
+        totalRebounds = try c.decodeIfPresent(Int.self, forKey: .totalRebounds) ?? 0
+        totalAssists = try c.decodeIfPresent(Int.self, forKey: .totalAssists) ?? 0
+        totalSteals = try c.decodeIfPresent(Int.self, forKey: .totalSteals) ?? 0
+        totalBlocks = try c.decodeIfPresent(Int.self, forKey: .totalBlocks) ?? 0
+        totalMinutes = try c.decodeIfPresent(Int.self, forKey: .totalMinutes) ?? 0
+        totalFieldGoalsMade = try c.decodeIfPresent(Int.self, forKey: .totalFieldGoalsMade) ?? 0
+        totalFieldGoalsAttempted = try c.decodeIfPresent(Int.self, forKey: .totalFieldGoalsAttempted) ?? 0
+        totalThreeMade = try c.decodeIfPresent(Int.self, forKey: .totalThreeMade) ?? 0
+        totalThreeAttempted = try c.decodeIfPresent(Int.self, forKey: .totalThreeAttempted) ?? 0
+        totalFreeThrowsMade = try c.decodeIfPresent(Int.self, forKey: .totalFreeThrowsMade) ?? 0
+        totalFreeThrowsAttempted = try c.decodeIfPresent(Int.self, forKey: .totalFreeThrowsAttempted) ?? 0
+    }
+}
+
+extension SeasonSnapshot {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        seasonNumber = try c.decodeIfPresent(Int.self, forKey: .seasonNumber) ?? 1
+        seed = try c.decodeIfPresent(Int64.self, forKey: .seed) ?? 1
+        settings = try c.decodeIfPresent(LeagueSettings.self, forKey: .settings) ?? LeagueSettings()
+        games = try c.decodeIfPresent([Game].self, forKey: .games) ?? []
+        teamStats = try c.decodeIfPresent([TeamSeasonStat].self, forKey: .teamStats) ?? []
+        playerStats = try c.decodeIfPresent([PlayerSeasonStat].self, forKey: .playerStats) ?? []
+        playoffGames = try c.decodeIfPresent([Game].self, forKey: .playoffGames) ?? []
+        playoffSeries = try c.decodeIfPresent([PlayoffSeries].self, forKey: .playoffSeries) ?? []
+        championTeamId = try c.decodeIfPresent(UUID.self, forKey: .championTeamId)
+        championTeamName = try c.decodeIfPresent(String.self, forKey: .championTeamName)
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+    }
+}
+
+extension League {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        teams = try c.decodeIfPresent([Team].self, forKey: .teams) ?? []
+        settings = try c.decodeIfPresent(LeagueSettings.self, forKey: .settings) ?? LeagueSettings()
+        seasons = try c.decodeIfPresent([SeasonSnapshot].self, forKey: .seasons) ?? []
+        nextSeasonNumber = try c.decodeIfPresent(Int.self, forKey: .nextSeasonNumber) ?? 1
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
     }
 }
