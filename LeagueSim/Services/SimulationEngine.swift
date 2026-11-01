@@ -700,8 +700,8 @@ enum SimulationEngine {
 
     // 奖项：得分王/篮板王/助攻王/抢断王/盖帽王按场均最高（出场至少一半，凑不够就全算）；
     // DPOY 按抢断+盖帽综合；MVP 按场均分+板+助×1.5+抢断×2+盖帽×2+球队胜场×0.15；
-    // 最佳阵容按每个位置场均分排前三；FMVP 按总决赛场均分最高。
-    static func computeAwards(regularPlayerStats: [PlayerSeasonStat], regularTeamStats: [TeamSeasonStat], playoffGames: [Game], finalsGames: [Game], snapshotId: UUID, positionMap: [UUID: String]) -> (awards: [SeasonAward], first: [AllNBAEntry], second: [AllNBAEntry], third: [AllNBAEntry], leaders: [SeasonLeader], playoffPlayerStats: [PlayerSeasonStat], fmvpPlayerId: UUID?) {
+    // 最佳阵容按每个位置场均分排前三；FMVP 按冠军队总决赛场均分最高（败方再高也不给）。
+    static func computeAwards(regularPlayerStats: [PlayerSeasonStat], regularTeamStats: [TeamSeasonStat], playoffGames: [Game], finalsGames: [Game], snapshotId: UUID, positionMap: [UUID: String], championTeamId: UUID? = nil) -> (awards: [SeasonAward], first: [AllNBAEntry], second: [AllNBAEntry], third: [AllNBAEntry], leaders: [SeasonLeader], playoffPlayerStats: [PlayerSeasonStat], fmvpPlayerId: UUID?) {
         let maxGames = regularPlayerStats.map { $0.games }.max() ?? 0
         let threshold = max(1, maxGames / 2)
         let eligible = regularPlayerStats.filter { $0.games >= threshold }
@@ -736,7 +736,9 @@ enum SimulationEngine {
         var fmvpId: UUID? = nil
         if !finalsGames.isEmpty {
             let finalsStats = aggregatePlayerStats(games: finalsGames, seasonId: snapshotId, positionMap: positionMap)
-            if let fmvp = finalsStats.max(by: { $0.pointsPerGame < $1.pointsPerGame }) {
+            // 15 版修 FMVP 给败方：只在冠军队里比总决赛场均分，冠军未知时不发 FMVP，绝不再给败方。
+            let finalsPool = championTeamId != nil ? finalsStats.filter { $0.teamId == championTeamId } : []
+            if let fmvp = finalsPool.max(by: { $0.pointsPerGame < $1.pointsPerGame }) {
                 fmvpId = fmvp.playerId
                 awards.append(SeasonAward(title: "FMVP", playerId: fmvp.playerId, playerName: fmvp.playerName, teamName: fmvp.teamName, valueText: "总决赛场均 \(fmt(fmvp.pointsPerGame)) 分"))
             }
