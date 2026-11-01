@@ -29,28 +29,36 @@ struct ArchiveListView: View {
                         Text("还没有存档，点右上角“新建”开一个联赛。")
                             .foregroundStyle(.secondary)
                     }
+                    if store.isEnteringArchive {
+                        HStack {
+                            ProgressView()
+                            Text("正在进入存档，稍等一下……")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                     ForEach(store.archives, id: \.id) { meta in
-                        Button {
-                            store.enterArchive(id: meta.id)
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text(meta.name).font(.headline)
-                                    Text("\(meta.teamCount) 队 · \(meta.seasonCount) 个赛季")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if meta.id == currentId {
-                                    Text("当前")
-                                        .font(.caption)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 4)
-                                        .background(Color.orange.opacity(0.2))
-                                        .clipShape(Capsule())
-                                }
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(meta.name).font(.headline)
+                                Text("\(meta.teamCount) 队 · \(meta.seasonCount) 个赛季")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if meta.id == currentId {
+                                Text("当前")
+                                    .font(.caption)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Color.orange.opacity(0.2))
+                                    .clipShape(Capsule())
                             }
                         }
+                        // 修复“点了没反应”：不用 List 里的 Button（在部分系统上整行点按会丢），
+                        // 直接整行可点，点哪里都进；重复点按在 store 里已忽略。
+                        .contentShape(Rectangle())
+                        .onTapGesture { store.enterArchive(id: meta.id) }
                         .swipeActions {
                             Button("改名") {
                                 archiveToRename = meta
@@ -64,6 +72,14 @@ struct ArchiveListView: View {
                 }
             }
             .navigationTitle("NBA模拟器")
+            .alert("进不去", isPresented: Binding(
+                get: { store.enterErrorMessage != nil },
+                set: { if !$0 { store.enterErrorMessage = nil } }
+            )) {
+                Button("知道了") { store.enterErrorMessage = nil }
+            } message: {
+                Text(store.enterErrorMessage ?? "")
+            }
             .toolbar {
                 Button("新建") { showingCreate = true }
             }
