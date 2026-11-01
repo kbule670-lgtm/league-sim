@@ -10,6 +10,9 @@ final class LeagueStore: ObservableObject {
     @Published var archives: [ArchiveMeta] = []
     @Published var currentLeague: League?
     @Published var lastSaveOK: Bool = true
+    // 进存档状态：正在解码时界面显示“正在进入”，失败时弹具体错误，不再静默没反应。
+    @Published var isEnteringArchive = false
+    @Published var enterErrorMessage: String? = nil
 
     var currentArchiveId: UUID? { currentLeague?.id }
 
@@ -47,12 +50,28 @@ final class LeagueStore: ObservableObject {
     }
 
     // MARK: 切换（先存后载）
+    // 修复“1、2、3 全点了都进不去”：以前在主线程同步解码，文件大时会卡住、
+    // 解码失败时又静默 return，界面看起来就是点了没反应。现在改成：
+    // 后台解码（主线程不卡，能看到“正在进入”）、失败弹具体错误、重复点按直接忽略。
     func enterArchive(id: UUID) {
+        guard !isEnteringArchive else { return }
         if let current = currentLeague { save(current) }
-        guard let league = ArchiveStore.loadLeague(id: id) else { return }
-        currentLeague = league
-        ArchiveStore.saveCurrentArchiveId(id)
-        refreshArchives()
+        isEnteringArchive = true
+        enterErrorMessage = nil
+        Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                ArchiveStore.loadLeagueResult(id: id)
+            }.value
+            isEnteringArchive = false
+            switch result {
+            case .success(let league):
+                currentLeague = league
+                ArchiveStore.saveCurrentArchiveId(id)
+                refreshArchives()
+            case .failure(let error):
+                enterErrorMessage = "进不去：\(error.localizedDescription)"
+            }
+        }
     }
 
     func backToArchiveList() {
