@@ -3,10 +3,14 @@ import SwiftUI
 // 虚拟播报页：点进一场比赛，比分从 0:0 一步步走到终场。
 // 快速跳过也在这个页里：点“快速跳过”直接跳到终场分，不用等播完。
 // 内存：events 只在这一页的内存里，退出即丢，不写存档。
-// 暂停修法：播放/暂停键永远只切 isPlaying，绝不改 shownCount；
-// 从头来只有“重播”一个键，播完后播放键直接禁用，不会再出现
-// “点暂停结果从头播、跟重播一个功能”的情况。
-// 倍速：0.5x/1x/2x/4x，改倍速就重建计时器，步长 = 0.5 秒 / 倍速。
+// 暂停修法（9 版，修“暂停后跳回开头又卡住”）：
+// 以前用 Timer.publish 存进 @State，换倍速就换一个新计时器，旧计时器没取消干净，
+// 暂停时计时器和 isPlaying 容易脱节：按钮还显示“暂停”，比分却卡住不动，
+// 再点也恢复不了；而且 onAppear 每次都把 shownCount 清零重播。
+// 现在改成任务循环：isPlaying 或倍速一变，旧任务就取消、新任务按新倍速重起；
+// 暂停就是取消任务，比分停在原地，按钮变回“播放”；再点播放从原地继续，绝不从头；
+// 只有“重播”才清零；重进页面时如果 events 已有，就不再清零。
+// 倍速：0.5x/1x/2x/4x，步长 = 0.5 秒 / 倍速。
 struct BroadcastView: View {
     var game: Game
     var seasonSeed: Int64
@@ -15,7 +19,6 @@ struct BroadcastView: View {
     @State private var shownCount = 0
     @State private var isPlaying = false
     @State private var speed: Double = 1.0
-    @State private var timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
     private var currentHome: Int {
         shownCount > 0 ? events[min(shownCount, events.count) - 1].homeScore : 0
@@ -43,12 +46,14 @@ struct BroadcastView: View {
                 if isFinished {
                     Text("终场哨响，比分已定。")
                         .font(.caption).foregroundStyle(.secondary)
+                } else if !isPlaying && shownCount > 0 {
+                    Text("已暂停，停在当前比分，点“播放”从这里继续，不会从头来。")
+                        .font(.caption).foregroundStyle(.orange)
                 }
             }
             Section {
                 HStack {
                     Button(isPlaying ? "暂停" : "播放") {
-                        // 只切播放状态，不动 shownCount：暂停就是暂停，绝不从头来。
                         if isPlaying {
                             isPlaying = false
                         } else if !isFinished {
@@ -98,23 +103,26 @@ struct BroadcastView: View {
         }
         .navigationTitle("虚拟播报")
         .onAppear {
-            events = BroadcastGenerator.events(for: game, seasonSeed: seasonSeed)
-            shownCount = 0
-            isPlaying = true
+            if events.isEmpty {
+                events = BroadcastGenerator.events(for: game, seasonSeed: seasonSeed)
+                shownCount = 0
+                isPlaying = true
+            }
         }
         .onDisappear {
             isPlaying = false
         }
-        // 单参数 onChange：iOS 16 写法。
-        .onChange(of: speed) { _ in
-            timer = Timer.publish(every: 0.5 / speed, on: .main, in: .common).autoconnect()
-        }
-        .onReceive(timer) { _ in
-            guard isPlaying, !events.isEmpty, shownCount < events.count else {
+        // 每步一个任务：id 里带上 shownCount，播一步就换一个新任务接着播；
+        // 暂停会取消当前任务，播放/换倍速/重播都会按当前 shownCount 重起，不会卡在旧计时器上。
+        .task(id: "\(isPlaying)-\(speed)-\(shownCount)") {
+            guard isPlaying, shownCount < events.count else { return }
+            let interval = 0.5 / speed
+            try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            if Task.isCancelled { return }
+            if shownCount < events.count {
+                shownCount += 1
                 if shownCount >= events.count { isPlaying = false }
-                return
             }
-            shownCount += 1
         }
     }
 }
