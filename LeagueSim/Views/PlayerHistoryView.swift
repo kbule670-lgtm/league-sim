@@ -25,8 +25,24 @@ struct PlayerHistoryView: View {
 
     private var honors: [PlayerHonor] {
         guard let league = store.currentLeague else { return [] }
-        for team in league.teams { for slot in team.roster where slot.player.id == playerId { return slot.player.honors } }
-        return []
+        var rosterHonors: [PlayerHonor] = []
+        for team in league.teams { for slot in team.roster where slot.player.id == playerId { rosterHonors = slot.player.honors } }
+        // 15 版补回已丢荣誉：编辑球员曾把荣誉清零，但赛季快照是冻结的，从快照里把奖项和总冠军补回来，
+        // 已有同类型同赛季的去重，不重复。最佳阵容快照里只有名字没有球员 ID，暂不从快照补。
+        var seen = Set(rosterHonors.map { "\($0.type)-\($0.seasonNumber)" })
+        var merged = rosterHonors
+        for season in league.seasons {
+            for award in season.awards where award.playerId == playerId {
+                let key = "\(award.title)-\(season.seasonNumber)"
+                if !seen.contains(key) { seen.insert(key); merged.append(PlayerHonor(type: award.title, seasonNumber: season.seasonNumber, teamName: award.teamName, detail: award.valueText)) }
+            }
+            if let cid = season.championTeamId, let cname = season.championTeamName,
+               season.playerStats.contains(where: { $0.playerId == playerId && $0.teamId == cid }) {
+                let key = "总冠军-\(season.seasonNumber)"
+                if !seen.contains(key) { seen.insert(key); merged.append(PlayerHonor(type: "总冠军", seasonNumber: season.seasonNumber, teamName: cname, detail: "第 \(season.seasonNumber) 赛季")) }
+            }
+        }
+        return merged.sorted { $0.seasonNumber > $1.seasonNumber }
     }
 
     var body: some View {

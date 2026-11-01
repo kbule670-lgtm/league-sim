@@ -153,12 +153,14 @@ struct PlayerEditorView: View {
     }
 
     private func save() {
+        // 15 版修编辑丢荣誉：新建 Player 时把原荣誉带上，否则改一次能力/球衣就把前几赛季荣誉全清空。
         let player = Player(id: slot?.player.id ?? UUID(),
                             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
                             jerseyNumber: Int(jerseyText) ?? 0, position: position,
                             age: Int(ageText) ?? 25, heightCm: Int(heightText) ?? 195,
                             weightKg: Int(weightText) ?? 90, attributes: attrs.clamped(),
-                            overallOverride: useManualOverall ? manualOverall : nil)
+                            overallOverride: useManualOverall ? manualOverall : nil,
+                            honors: slot?.player.honors ?? [])
         if let slot {
             store.updatePlayer(in: teamId, slot: RosterSlot(player: player, status: status,
                                                              rotationOrder: slot.rotationOrder))

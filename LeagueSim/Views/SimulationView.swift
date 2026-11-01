@@ -243,6 +243,9 @@ struct HistoryView: View {
     @State private var foldHistoryPlayoffs = true
     @State private var foldAwards = true
     @State private var foldDivisions = false
+    @State private var foldSeasonAwardsOverview = true
+    @State private var foldHistoryLeaderboard = false
+    @State private var historyLeaderCategory = "得分"
 
     private var seasons: [SeasonSnapshot] {
         store.currentLeague?.seasons.sorted { $0.seasonNumber > $1.seasonNumber } ?? []
@@ -250,6 +253,49 @@ struct HistoryView: View {
 
     private var selected: SeasonSnapshot? {
         seasons.first { $0.id == selectedSeasonId } ?? seasons.first
+    }
+
+    // 跨赛季累计：同一球员各赛季统计相加，队名取最近一个赛季的。
+    private func historyAggregatedStats(seasons: [SeasonSnapshot]) -> [PlayerSeasonStat] {
+        var totals: [UUID: PlayerSeasonStat] = [:]
+        for season in seasons.sorted(by: { $0.seasonNumber < $1.seasonNumber }) {
+            for stat in season.playerStats {
+                var total = totals[stat.playerId] ?? PlayerSeasonStat(playerId: stat.playerId, playerName: stat.playerName, teamId: stat.teamId, teamName: stat.teamName, seasonId: season.id, games: 0, totalPoints: 0, totalRebounds: 0, totalAssists: 0, totalSteals: 0, totalBlocks: 0, totalMinutes: 0)
+                total.games += stat.games; total.totalPoints += stat.totalPoints; total.totalRebounds += stat.totalRebounds; total.totalAssists += stat.totalAssists; total.totalSteals += stat.totalSteals; total.totalBlocks += stat.totalBlocks; total.totalMinutes += stat.totalMinutes
+                total.totalFieldGoalsMade += stat.totalFieldGoalsMade; total.totalFieldGoalsAttempted += stat.totalFieldGoalsAttempted; total.totalThreeMade += stat.totalThreeMade; total.totalThreeAttempted += stat.totalThreeAttempted; total.totalFreeThrowsMade += stat.totalFreeThrowsMade; total.totalFreeThrowsAttempted += stat.totalFreeThrowsAttempted; total.totalFouls += stat.totalFouls
+                total.teamName = stat.teamName; total.teamId = stat.teamId; total.playerName = stat.playerName
+                totals[stat.playerId] = total
+            }
+        }
+        return Array(totals.values)
+    }
+
+    private func historyRankedStats(stats: [PlayerSeasonStat], category: String) -> [PlayerSeasonStat] {
+        switch category {
+        case "得分": return stats.filter { $0.games >= 82 }.sorted { $0.pointsPerGame > $1.pointsPerGame }
+        case "篮板": return stats.filter { $0.games >= 82 }.sorted { $0.reboundsPerGame > $1.reboundsPerGame }
+        case "助攻": return stats.filter { $0.games >= 82 }.sorted { $0.assistsPerGame > $1.assistsPerGame }
+        case "抢断": return stats.filter { $0.games >= 82 }.sorted { $0.stealsPerGame > $1.stealsPerGame }
+        case "盖帽": return stats.filter { $0.games >= 82 }.sorted { $0.blocksPerGame > $1.blocksPerGame }
+        case "投篮": return stats.filter { $0.totalFieldGoalsAttempted >= 300 }.sorted { $0.fieldGoalPercentage > $1.fieldGoalPercentage }
+        case "三分": return stats.filter { $0.totalThreeAttempted >= 300 }.sorted { $0.threePercentage > $1.threePercentage }
+        case "罚球": return stats.filter { $0.totalFreeThrowsAttempted >= 300 }.sorted { $0.freeThrowPercentage > $1.freeThrowPercentage }
+        default: return []
+        }
+    }
+
+    private func historyLeaderValueText(stat: PlayerSeasonStat, category: String) -> String {
+        switch category {
+        case "得分": return String(format: "场均 %.1f 分 · 出场 %d 场", stat.pointsPerGame, stat.games)
+        case "篮板": return String(format: "场均 %.1f 板 · 出场 %d 场", stat.reboundsPerGame, stat.games)
+        case "助攻": return String(format: "场均 %.1f 助 · 出场 %d 场", stat.assistsPerGame, stat.games)
+        case "抢断": return String(format: "场均 %.1f 断 · 出场 %d 场", stat.stealsPerGame, stat.games)
+        case "盖帽": return String(format: "场均 %.1f 帽 · 出场 %d 场", stat.blocksPerGame, stat.games)
+        case "投篮": return String(format: "%.1f%% · %d/%d", stat.fieldGoalPercentage * 100, stat.totalFieldGoalsMade, stat.totalFieldGoalsAttempted)
+        case "三分": return String(format: "%.1f%% · %d/%d", stat.threePercentage * 100, stat.totalThreeMade, stat.totalThreeAttempted)
+        case "罚球": return String(format: "%.1f%% · %d/%d", stat.freeThrowPercentage * 100, stat.totalFreeThrowsMade, stat.totalFreeThrowsAttempted)
+        default: return ""
+        }
     }
 
     var body: some View {
@@ -273,13 +319,62 @@ struct HistoryView: View {
                             }
                         }
                     }
+                    // 15 版新增：历年奖项一览 + 历史数据榜前 30，不用一个赛季一个赛季翻。
+                    Section {
+                        Button { foldSeasonAwardsOverview.toggle() } label: {
+                            HStack { Text("历年奖项一览（每个赛季 MVP、得分王等）"); Spacer(); Image(systemName: foldSeasonAwardsOverview ? "chevron.down" : "chevron.right") }
+                        }
+                        if foldSeasonAwardsOverview {
+                            if seasons.isEmpty {
+                                Text("还没有跑完的赛季。").font(.caption).foregroundStyle(.secondary)
+                            }
+                            ForEach(seasons) { season in
+                                let mvp = season.awards.first { $0.title == "MVP" }
+                                let fmvp = season.awards.first { $0.title == "FMVP" }
+                                let score = season.awards.first { $0.title == "得分王" }
+                                let rebound = season.awards.first { $0.title == "篮板王" }
+                                let assist = season.awards.first { $0.title == "助攻王" }
+                                let steal = season.seasonLeaders.first { $0.category == "抢断王" }
+                                let block = season.seasonLeaders.first { $0.category == "盖帽王" }
+                                VStack(alignment: .leading) {
+                                    Text("第 \(season.seasonNumber) 赛季").font(.headline)
+                                    Text("MVP：\(mvp?.playerName ?? "—")（\(mvp?.teamName ?? "—")）· FMVP：\(fmvp?.playerName ?? "—") · 总冠军：\(season.championTeamName ?? "—")").font(.caption).foregroundStyle(.secondary)
+                                    Text("得分王：\(score?.playerName ?? "—") · 篮板王：\(rebound?.playerName ?? "—") · 助攻王：\(assist?.playerName ?? "—") · 抢断王：\(steal?.playerName ?? "—") · 盖帽王：\(block?.playerName ?? "—")").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    Section {
+                        Button { foldHistoryLeaderboard.toggle() } label: {
+                            HStack { Text("历史数据榜前 30（跨赛季累计）"); Spacer(); Image(systemName: foldHistoryLeaderboard ? "chevron.down" : "chevron.right") }
+                        }
+                        if foldHistoryLeaderboard {
+                            Picker("数据", selection: $historyLeaderCategory) {
+                                ForEach(["得分", "篮板", "助攻", "抢断", "盖帽", "投篮", "三分", "罚球"], id: \.self) { Text($0) }
+                            }
+                            .pickerStyle(.segmented)
+                            let aggregated = historyAggregatedStats(seasons: seasons)
+                            let ranked = historyRankedStats(stats: aggregated, category: historyLeaderCategory)
+                            if ranked.isEmpty {
+                                Text("还没有跨赛季数据：跑完一赛季后这里才有。").font(.caption).foregroundStyle(.secondary)
+                            }
+                            ForEach(Array(ranked.prefix(30).enumerated()), id: \.element.playerId) { index, stat in
+                                HStack {
+                                    Text("\(index + 1). \(stat.playerName)（\(stat.teamName)）")
+                                    Spacer()
+                                    Text(historyLeaderValueText(stat: stat, category: historyLeaderCategory)).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                            Text("计分榜按场均排（累计出场至少 82 场）；命中率榜按命中率排（累计出手至少 300 次），老快照投篮为 0 的不进命中率榜。").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                     if let season = selected {
                         Section {
                 Button { foldStandings.toggle() } label: {
                     HStack { Text("球队战绩（常规赛胜场、净胜分排序）"); Spacer(); Image(systemName: foldStandings ? "chevron.down" : "chevron.right") }
                 }
                 if foldStandings {
-                            ForEach(season.teamStats) { stat in
+                            ForEach(season.teamStats.sorted { ($0.wins, $0.pointDiff, $0.pointsFor) > ($1.wins, $1.pointDiff, $1.pointsFor) }) { stat in
                                 HStack {
                                     Text(stat.teamName)
                                     Spacer()
@@ -297,7 +392,7 @@ struct HistoryView: View {
                 if foldEastWest {
                                 ForEach(["东部", "西部"], id: \.self) { conference in
                                     Text(conference).font(.headline)
-                                    ForEach(season.teamStats.filter { $0.conference == conference }) { stat in
+                                    ForEach(season.teamStats.filter { $0.conference == conference }.sorted { ($0.wins, $0.pointDiff, $0.pointsFor) > ($1.wins, $1.pointDiff, $1.pointsFor) }) { stat in
                                         Text("\(stat.teamName)：\(stat.wins) 胜 \(stat.losses) 负")
                                             .font(.caption)
                                     }
@@ -371,7 +466,7 @@ struct HistoryView: View {
                             }
                             ForEach(divisions.keys.sorted(), id: \.self) { division in
                                 Text(division).font(.headline)
-                                ForEach(divisions[division] ?? []) { stat in
+                                ForEach((divisions[division] ?? []).sorted { ($0.wins, $0.pointDiff, $0.pointsFor) > ($1.wins, $1.pointDiff, $1.pointsFor) }) { stat in
                                     Text("\(stat.teamName)：\(stat.wins) 胜 \(stat.losses) 负")
                                         .font(.caption)
                                 }
