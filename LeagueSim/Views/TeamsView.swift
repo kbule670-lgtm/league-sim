@@ -6,7 +6,7 @@ struct TeamsView: View {
     var league: League
     @EnvironmentObject private var store: LeagueStore
 
-    private struct TeamGroup: Identifiable {
+    struct TeamGroup: Identifiable {
         var id: String { key }
         var key: String
         var teams: [Team]
@@ -39,49 +39,75 @@ struct TeamsView: View {
                     }
                 }
                 ForEach(grouped, id: \.key) { group in
-                    Section(group.key) {
-                        ForEach(group.teams) { team in
-                            NavigationLink {
-                                TeamDetailView(teamId: team.id)
-                            } label: {
-                                HStack {
-                                    Circle()
-                                        .fill(team.color())
-                                        .frame(width: 28, height: 28)
-                                        .overlay(Text(team.abbreviation.isEmpty ? "?" : team.abbreviation)
-                                            .font(.caption2).foregroundStyle(.white))
-                                    VStack(alignment: .leading) {
-                                        Text(team.name).font(.headline)
-                                        Text("激活 \(team.activeRoster.count) 人 · 首发 \(team.starters.count) 人")
-                                            .font(.caption).foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    if !Validation.warnings(for: team).isEmpty {
-                                        Image(systemName: "exclamationmark.triangle")
-                                            .foregroundStyle(.orange)
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    TeamGroupSection(group: group)
                 }
             }
             .navigationTitle("球队")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button(action: { store.backToArchiveList() }) {
-                        ZStack {
-                            Circle().fill(Color.black.opacity(0.8)).frame(width: 36, height: 36)
-                            Image(systemName: "chevron.left").foregroundStyle(.white).font(.system(size: 17, weight: .semibold))
-                        }
-                    }
-                    .accessibilityLabel("退出存档")
+                    ExitArchiveButton()
                 }
                 Button("全部填测试名单") {
                     store.fillTestRostersForAllEmptyTeams()
                 }
             }
         }
+    }
+}
+
+
+// 球队行标签（从 TeamsView.body 里拆出来）：编译器对原来整页一个大表达式算不过来，
+// 拆成独立小视图后每段类型检查都变小，样子和逻辑原样不动。
+private struct TeamRowLabel: View {
+    var team: Team
+    var body: some View {
+        HStack {
+            Circle()
+                .fill(team.color())
+                .frame(width: 28, height: 28)
+                .overlay(Text(team.abbreviation.isEmpty ? "?" : team.abbreviation)
+                    .font(.caption2).foregroundStyle(.white))
+            VStack(alignment: .leading) {
+                Text(team.name).font(.headline)
+                Text("激活 \(team.activeRoster.count) 人 · 首发 \(team.starters.count) 人")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if !Validation.warnings(for: team).isEmpty {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+}
+
+// 一个分区的球队段（同样是拆分用）：段内每队一行，点进球队详情。
+private struct TeamGroupSection: View {
+    var group: TeamsView.TeamGroup
+    var body: some View {
+        Section(group.key) {
+            ForEach(group.teams) { team in
+                NavigationLink {
+                    TeamDetailView(teamId: team.id)
+                } label: {
+                    TeamRowLabel(team: team)
+                }
+            }
+        }
+    }
+}
+
+// 左上角圆形退出按钮（黑圆白箭头）：点一下保存当前存档并回到存档列表。
+private struct ExitArchiveButton: View {
+    @EnvironmentObject private var store: LeagueStore
+    var body: some View {
+        Button(action: { store.backToArchiveList() }) {
+            ZStack {
+                Circle().fill(Color.black.opacity(0.8)).frame(width: 36, height: 36)
+                Image(systemName: "chevron.left").foregroundStyle(.white).font(.system(size: 17, weight: .semibold))
+            }
+        }
+        .accessibilityLabel("退出存档")
     }
 }
 
