@@ -3,6 +3,10 @@ import SwiftUI
 // 虚拟播报页：点进一场比赛，比分从 0:0 一步步走到终场。
 // 快速跳过也在这个页里：点“快速跳过”直接跳到终场分，不用等播完。
 // 内存：events 只在这一页的内存里，退出即丢，不写存档。
+// 暂停修法：播放/暂停键永远只切 isPlaying，绝不改 shownCount；
+// 从头来只有“重播”一个键，播完后播放键直接禁用，不会再出现
+// “点暂停结果从头播、跟重播一个功能”的情况。
+// 倍速：0.5x/1x/2x/4x，改倍速就重建计时器，步长 = 0.5 秒 / 倍速。
 struct BroadcastView: View {
     var game: Game
     var seasonSeed: Int64
@@ -10,7 +14,8 @@ struct BroadcastView: View {
     @State private var events: [BroadcastEvent] = []
     @State private var shownCount = 0
     @State private var isPlaying = false
-    private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+    @State private var speed: Double = 1.0
+    @State private var timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
     private var currentHome: Int {
         shownCount > 0 ? events[min(shownCount, events.count) - 1].homeScore : 0
@@ -43,14 +48,14 @@ struct BroadcastView: View {
             Section {
                 HStack {
                     Button(isPlaying ? "暂停" : "播放") {
-                        if isFinished {
-                            shownCount = 0
+                        // 只切播放状态，不动 shownCount：暂停就是暂停，绝不从头来。
+                        if isPlaying {
+                            isPlaying = false
+                        } else if !isFinished {
                             isPlaying = true
-                        } else {
-                            isPlaying.toggle()
                         }
                     }
-                    .disabled(events.isEmpty)
+                    .disabled(events.isEmpty || isFinished)
                     Spacer()
                     Button("快速跳过") {
                         shownCount = events.count
@@ -64,7 +69,14 @@ struct BroadcastView: View {
                     }
                     .disabled(events.isEmpty)
                 }
-                Text("每步约 0.5 秒自动往前走；不想等就点快速跳过，直接看终场。")
+                Picker("倍速", selection: $speed) {
+                    Text("0.5x").tag(0.5)
+                    Text("1x").tag(1.0)
+                    Text("2x").tag(2.0)
+                    Text("4x").tag(4.0)
+                }
+                .pickerStyle(.segmented)
+                Text("当前 \(speed, specifier: "%.1f")x，每步约 \(0.5 / speed, specifier: "%.3f") 秒；暂停只停住，播完后播放键不可点、只能点重播。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("最近得分") {
@@ -73,8 +85,13 @@ struct BroadcastView: View {
                 } else {
                     let recent = events.prefix(shownCount).suffix(10).reversed()
                     ForEach(recent) { event in
-                        Text("\(event.timeText) · \(event.isHomeScoring ? game.homeTeamName : game.awayTeamName) +\(event.points) · \(event.homeScore) : \(event.awayScore)")
-                            .font(.caption)
+                        if event.scorerName.isEmpty {
+                            Text("\(event.timeText) · \(event.isHomeScoring ? game.homeTeamName : game.awayTeamName) +\(event.points) · \(event.homeScore) : \(event.awayScore)")
+                                .font(.caption)
+                        } else {
+                            Text("\(event.timeText) · \(event.scorerName) +\(event.points)（\(event.isHomeScoring ? game.homeTeamName : game.awayTeamName)）· \(event.homeScore) : \(event.awayScore)")
+                                .font(.caption)
+                        }
                     }
                 }
             }
@@ -84,6 +101,13 @@ struct BroadcastView: View {
             events = BroadcastGenerator.events(for: game, seasonSeed: seasonSeed)
             shownCount = 0
             isPlaying = true
+        }
+        .onDisappear {
+            isPlaying = false
+        }
+        // 单参数 onChange：iOS 16 写法。
+        .onChange(of: speed) { _ in
+            timer = Timer.publish(every: 0.5 / speed, on: .main, in: .common).autoconnect()
         }
         .onReceive(timer) { _ in
             guard isPlaying, !events.isEmpty, shownCount < events.count else {
