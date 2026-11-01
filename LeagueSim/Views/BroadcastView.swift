@@ -1,28 +1,38 @@
 import SwiftUI
 
-// 虚拟播报页：点进一场比赛，比分从 0:0 一步步走到终场。
+// 虚拟播报页：点进一场比赛，比分从 0:0 一步步播到终场。
 // 快速跳过也在这个页里：点“快速跳过”直接跳到终场分，不用等播完。
 // 内存：events 只在播放器里，退出页面不写存档。
 //
-// 暂停/重制根因（10 版，修 9 版没修掉的）：
-// 9 版以前播放状态（events、shownCount、isPlaying）都存在页面自己的 @State 里，
-// 页面一被系统重建（父页面一刷新、导航栈一动），@State 就被清空，onAppear 又
-// 把 shownCount 清零、isPlaying 置 true，于是播到一半就跳回 0:2、按钮还一直是
-// “暂停”——点暂停根本没生效，不是计时器换没换的问题。
-// 现在播放状态搬到页面外的 BroadcastPlayer，按比赛 id 缓存：页面重建多少次，
-// 播放器还是同一个，shownCount 和暂停状态都不会丢；onAppear 只在第一次进
-// 来时自动播，之后重进、重建都不自动重播、不自动续播；离开页面也不强制
-// 暂停（避免重建时误触发 onDisappear 把播放停掉），要停只能点“暂停”，
-// 要从头只能点“重播”。
-// 倍速：0.5x/1x/2x/4x，任务每步都按当前倍速算步长，换倍速不用重建任务、不清零。
+// 11 版（按 GPT 方案收口，10 版的思路 + 补上 GPT 强调的两点）：
+// 1. 单一播放器、单一任务：events、shownCount、isPlaying、speed 全在 BroadcastPlayer
+//    里，页面只观察、不自己维护进度；不用 Timer，不用 .task(id:) 反复重建任务。
+// 2. 播放器实例唯一：按比赛 id 静态缓存，同一场比赛永远复用同一个播放器，
+//    页面重建、导航栈刷新、重新进页都不能重新创建进度。
+// 3. 任务代次校验（10 版缺的）：play/pause/replay/skip 都会让 taskGeneration +1，
+//    任务循环每步都校验 generation == taskGeneration、!Task.isCancelled、isPlaying，
+//    三项缺一就立刻退出，旧任务失效后绝对不能再改 shownCount。
+// 4. 暂停：isPlaying = false、代次 +1、取消任务，保留 shownCount 和 events，
+//    UI 立即变“播放”并显示“已暂停”。
+// 5. 继续：从当前 shownCount 继续，不重新生成事件、不清零；启动前如果已在播就不重起任务。
+// 6. 重播：只有主动点“重播”才清零；其他任何操作都不能把 shownCount 设为 0。
+// 7. 倍速：只改 speed，任务下一次循环按 0.5 / speed 算间隔，不销毁播放器、不重建事件、不重置进度。
+// 8. 生命周期：onAppear 只获取已有播放器、只在第一次自动播；onDisappear 不清零、不强制暂停，
+//    离开再进入保留原来的播放状态（要停只能点暂停）。
+// 9. 诊断：页面底部有一行小字诊断（播放器 id 后 4 位、已播步数/总数、播放状态、任务代次），
+//    再出问题截图这一行就能判断是播放器被重建、还是旧任务在改进度；同时打 print 日志。
 @MainActor
 final class BroadcastPlayer: ObservableObject {
     private static var cache: [UUID: BroadcastPlayer] = [:]
 
     static func shared(game: Game, seasonSeed: Int64) -> BroadcastPlayer {
-        if let existing = cache[game.id] { return existing }
+        if let existing = cache[game.id] {
+            print("[播报] 缓存命中 game=\(game.id) shown=\(existing.shownCount) playing=\(existing.isPlaying)")
+            return existing
+        }
         let player = BroadcastPlayer(game: game, seasonSeed: seasonSeed)
         cache[game.id] = player
+        print("[播报] 新建播放器 game=\(game.id) events=\(player.events.count)")
         return player
     }
 
@@ -31,6 +41,7 @@ final class BroadcastPlayer: ObservableObject {
     @Published var shownCount = 0
     @Published var isPlaying = false
     @Published var speed: Double = 1.0
+    @Published private(set) var taskGeneration = 0
     private(set) var hasStarted = false
     private var task: Task<Void, Never>?
 
@@ -40,26 +51,41 @@ final class BroadcastPlayer: ObservableObject {
     }
 
     var isFinished: Bool { !events.isEmpty && shownCount >= events.count }
+    var debugLine: String {
+        "诊断：播放器 \(String(game.id.uuidString.suffix(4))) · 已播 \(shownCount)/\(events.count) · \(isPlaying ? "播放中" : "已暂停/未播") · 任务代次 \(taskGeneration)"
+    }
 
     func startIfNeeded() {
         if !hasStarted {
             hasStarted = true
+            print("[播报] 首次进页自动播 game=\(game.id)")
             play()
+        } else {
+            print("[播报] 已有播放器，不自动重播 game=\(game.id) shown=\(shownCount) playing=\(isPlaying)")
         }
     }
 
     func play() {
         guard shownCount < events.count else { isPlaying = false; return }
+        if isPlaying, task != nil {
+            print("[播报] 已在播，不重起任务 game=\(game.id) shown=\(shownCount)")
+            return
+        }
         isPlaying = true
         task?.cancel()
+        taskGeneration += 1
+        let generation = taskGeneration
+        print("[播报] 播放点击/启动 generation=\(generation) shown=\(shownCount)")
         task = Task {
             while !Task.isCancelled {
                 let interval = 0.5 / speed
                 try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
-                if Task.isCancelled { return }
-                guard isPlaying else { return }
+                if Task.isCancelled { print("[播报] 任务取消退出 generation=\(generation)"); return }
+                guard generation == taskGeneration else { print("[播报] 旧任务代次失效退出 generation=\(generation) current=\(taskGeneration)"); return }
+                guard isPlaying else { print("[播报] 已暂停退出 generation=\(generation)"); return }
                 if shownCount < events.count {
                     shownCount += 1
+                    print("[播报] 推进 generation=\(generation) shown=\(shownCount)")
                     if shownCount >= events.count { isPlaying = false; return }
                 } else {
                     isPlaying = false
@@ -70,20 +96,30 @@ final class BroadcastPlayer: ObservableObject {
     }
 
     func pause() {
+        print("[播报] 暂停点击 shown=\(shownCount) generation=\(taskGeneration)")
         isPlaying = false
+        taskGeneration += 1
         task?.cancel()
         task = nil
     }
 
     func replay() {
-        pause()
+        print("[播报] 重播点击（唯一允许清零的操作）旧 shown=\(shownCount)")
+        isPlaying = false
+        taskGeneration += 1
+        task?.cancel()
+        task = nil
         shownCount = 0
         hasStarted = true
         play()
     }
 
     func skip() {
-        pause()
+        print("[播报] 快速跳过 shown=\(shownCount)")
+        isPlaying = false
+        taskGeneration += 1
+        task?.cancel()
+        task = nil
         shownCount = events.count
     }
 }
@@ -127,6 +163,8 @@ struct BroadcastView: View {
                     Text("已暂停，停在当前比分，点“播放”从这里继续，不会从头来。")
                         .font(.caption).foregroundStyle(.orange)
                 }
+                Text(player.debugLine)
+                    .font(.caption2).foregroundStyle(.secondary)
             }
             Section {
                 HStack {
