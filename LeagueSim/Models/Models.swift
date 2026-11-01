@@ -170,6 +170,9 @@ struct LeagueSettings: Codable, Equatable {
 }
 
 // MARK: - 单场球员数据（box score）
+// 投篮字段是新增（默认 0）：老快照的 box 里没有这些键时解码补 0，
+// 老比赛打开就是投篮 0 中 0，不会读坏；新比赛才有真实出手/命中。
+// 约束（引擎保证）：总命中 = 两分命中 + 三分命中；得分 = 两分命中*2 + 三分命中*3 + 罚球命中。
 struct PlayerGameStat: Codable, Equatable {
     var playerId: UUID
     var playerName: String
@@ -180,6 +183,22 @@ struct PlayerGameStat: Codable, Equatable {
     var assists: Int
     var steals: Int
     var blocks: Int
+    var fieldGoalsMade: Int = 0
+    var fieldGoalsAttempted: Int = 0
+    var threeMade: Int = 0
+    var threeAttempted: Int = 0
+    var freeThrowsMade: Int = 0
+    var freeThrowsAttempted: Int = 0
+
+    var fieldGoalPercentage: Double {
+        fieldGoalsAttempted > 0 ? Double(fieldGoalsMade) / Double(fieldGoalsAttempted) : 0
+    }
+    var threePercentage: Double {
+        threeAttempted > 0 ? Double(threeMade) / Double(threeAttempted) : 0
+    }
+    var freeThrowPercentage: Double {
+        freeThrowsAttempted > 0 ? Double(freeThrowsMade) / Double(freeThrowsAttempted) : 0
+    }
 }
 
 // MARK: - 一场比赛
@@ -226,6 +245,22 @@ struct PlayerSeasonStat: Codable, Identifiable, Equatable {
     var totalSteals: Int
     var totalBlocks: Int
     var totalMinutes: Int
+    // 赛季投篮累计（新增，默认 0，老快照补 0）：只算常规赛，季后赛不并进来。
+    var totalFieldGoalsMade: Int = 0
+    var totalFieldGoalsAttempted: Int = 0
+    var totalThreeMade: Int = 0
+    var totalThreeAttempted: Int = 0
+    var totalFreeThrowsMade: Int = 0
+    var totalFreeThrowsAttempted: Int = 0
+    var fieldGoalPercentage: Double {
+        totalFieldGoalsAttempted > 0 ? Double(totalFieldGoalsMade) / Double(totalFieldGoalsAttempted) : 0
+    }
+    var threePercentage: Double {
+        totalThreeAttempted > 0 ? Double(totalThreeMade) / Double(totalThreeAttempted) : 0
+    }
+    var freeThrowPercentage: Double {
+        totalFreeThrowsAttempted > 0 ? Double(totalFreeThrowsMade) / Double(totalFreeThrowsAttempted) : 0
+    }
     var pointsPerGame: Double { games > 0 ? Double(totalPoints) / Double(games) : 0 }
     var reboundsPerGame: Double { games > 0 ? Double(totalRebounds) / Double(games) : 0 }
     var assistsPerGame: Double { games > 0 ? Double(totalAssists) / Double(games) : 0 }
