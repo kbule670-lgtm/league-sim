@@ -765,11 +765,14 @@ enum SimulationEngine {
             return (0, fieldGoalsAttempted, 0, threeAttempted, 0, freeThrowsAttempted)
         }
         let threeShare = clamp(0.15 + Double(attrs.threePoint - 50) * 0.004, 0.10, 0.50)
-        let threePercentage = clamp(0.28 + Double(attrs.threePoint - 70) * 0.002
-            + (rng.nextDouble() - 0.5) * 0.24, 0.18, 0.50)
-        let freeThrowPercentage = clamp(0.70 + Double(attrs.freeThrow - 70) * 0.0025, 0.60, 0.92)
+        // 13 版上调：99 三分以前只有约 33.8%（0.28+0.058），朋友反馈太烧心。
+        // 新口径：70 分约 34%，99 分约 44%，50 分约 27%（clamp 25%），仍拉得开档次。
+        let threePercentage = clamp(0.34 + Double(attrs.threePoint - 70) * 0.0035
+            + (rng.nextDouble() - 0.5) * 0.16, 0.25, 0.48)
+        let freeThrowPercentage = clamp(0.74 + Double(attrs.freeThrow - 70) * 0.003, 0.65, 0.94)
         let shootingAverage = Double(attrs.threePoint + attrs.midRange + attrs.finishing) / 3.0
-        let fieldGoalPercentage = clamp((0.38 + (shootingAverage - 70.0) * 0.002) * shootingForm, 0.28, 0.65)
+        // 13 版上调：99 投射（三分/中投/终结均值 99）以前只有约 43.8%，新口径 70 分约 44%、99 分约 54%、50 分约 38%。
+        let fieldGoalPercentage = clamp((0.44 + (shootingAverage - 70.0) * 0.0035) * shootingForm, 0.30, 0.68)
         var threeMade = Int((Double(points) * threeShare / 3.0).rounded())
         threeMade = min(max(threeMade, 0), points / 3)
         if rng.nextDouble() < 0.3 && threeMade > 0 { threeMade -= 1 }
