@@ -27,7 +27,9 @@ struct SimulationView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            VStack(spacing: 0) {
+                QuizStyleHeader(title: "模拟", onExit: { store.backToArchiveList() })
+                Form {
                 if let league {
                     Section("本赛季设置（存在当前存档里）") {
                         Stepper("化学反应：\(league.settings.chemistry)", value: bindingSettings(\.chemistry), in: 0...99)
@@ -56,18 +58,7 @@ struct SimulationView: View {
                     }
                 }
             }
-            .navigationTitle("模拟")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(action: { store.backToArchiveList() }) {
-                        ZStack {
-                            Circle().fill(Color.black.opacity(0.8)).frame(width: 36, height: 36)
-                            Image(systemName: "chevron.left").foregroundStyle(.white).font(.system(size: 17, weight: .semibold))
-                        }
-                    }
-                    .accessibilityLabel("退出存档")
-                }
-            }
+
             .onAppear { if let league { seedText = "\(league.settings.lastSeed)" } }
             .onDisappear { autoPlaying = false }
             .onReceive(Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()) { _ in
@@ -85,6 +76,8 @@ struct SimulationView: View {
                 Button("只模拟该场") { if let id = selectedScheduledId { store.simulateRegularGame(scheduledId: id) } }
                 Button("取消", role: .cancel) {}
             } message: { Text("“模拟到该场”是把这场之前的未打场次连这场一起打完；“只模拟该场”是只打这一场，之前的场次留着以后打，排名按已打场次算。") }
+            }
+            .navigationBarHidden(true)
         }
     }
 
@@ -261,7 +254,9 @@ struct HistoryView: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            VStack(spacing: 0) {
+                QuizStyleHeader(title: "历史快照", onExit: { store.backToArchiveList() })
+                List {
                 if seasons.isEmpty {
                     Section {
                         Text("还没有跑完的赛季。去“模拟”跑一赛季，结束会自动存一条快照到这里。")
@@ -448,18 +443,8 @@ struct HistoryView: View {
                     }
                 }
             }
-            .navigationTitle("历史快照")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(action: { store.backToArchiveList() }) {
-                        ZStack {
-                            Circle().fill(Color.black.opacity(0.8)).frame(width: 36, height: 36)
-                            Image(systemName: "chevron.left").foregroundStyle(.white).font(.system(size: 17, weight: .semibold))
-                        }
-                    }
-                    .accessibilityLabel("退出存档")
-                }
             }
+            .navigationBarHidden(true)
         }
     }
 }

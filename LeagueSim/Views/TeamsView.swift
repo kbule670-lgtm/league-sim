@@ -51,28 +51,47 @@ struct TeamsView: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            VStack(spacing: 0) {
+                QuizStyleHeader(title: "球队", onExit: { store.backToArchiveList() })
+                List {
+                Section {
+                    Button("全部填测试名单") { store.fillTestRostersForAllEmptyTeams() }
+                }
                 tradeSection
                 warningsSection
                 teamSections
             }
-            .navigationTitle("球队")
-            // 顶栏只放 ToolbarItem、不混普通 Button：混搭是编译器算不过来的可疑点。
-            // 退出在左、填测试名单在右，样子不变。
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    ExitArchiveButton()
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("全部填测试名单") {
-                        store.fillTestRostersForAllEmptyTeams()
-                    }
-                }
             }
+            .navigationBarHidden(true)
         }
     }
 }
 
+
+// 刷题页式顶栏：黑底、左上角圆形返回箭头、标题居中，系统导航栏隐藏。
+// 点左上角箭头 = 保存当前存档并回到存档列表（不是只回上一页）。
+struct QuizStyleHeader: View {
+    var title: String
+    var onExit: () -> Void
+    var body: some View {
+        HStack {
+            Button(action: onExit) {
+                ZStack {
+                    Circle().fill(Color.white.opacity(0.15)).frame(width: 44, height: 44)
+                    Image(systemName: "chevron.left").foregroundStyle(.white).font(.system(size: 20, weight: .semibold))
+                }
+            }
+            .accessibilityLabel("退出存档")
+            Spacer()
+            Text(title).font(.headline).foregroundStyle(.white)
+            Spacer()
+            Color.clear.frame(width: 44, height: 44)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.black)
+    }
+}
 
 // 球队行标签（从 TeamsView.body 里拆出来）：编译器对原来整页一个大表达式算不过来，
 // 拆成独立小视图后每段类型检查都变小，样子和逻辑原样不动。

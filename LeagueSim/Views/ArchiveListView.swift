@@ -142,7 +142,9 @@ struct ArchiveSettingsView: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            VStack(spacing: 0) {
+                QuizStyleHeader(title: "存档", onExit: { store.backToArchiveList() })
+                List {
                 if let league = store.currentLeague {
                     Section("当前存档") {
                         Text(league.name).font(.headline)
@@ -171,18 +173,7 @@ struct ArchiveSettingsView: View {
                     }
                 }
             }
-            .navigationTitle("存档")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(action: { store.backToArchiveList() }) {
-                        ZStack {
-                            Circle().fill(Color.black.opacity(0.8)).frame(width: 36, height: 36)
-                            Image(systemName: "chevron.left").foregroundStyle(.white).font(.system(size: 17, weight: .semibold))
-                        }
-                    }
-                    .accessibilityLabel("退出存档")
-                }
-            }
+
             .alert("改名", isPresented: $showingRename) {
                 TextField("新名字", text: $renameText)
                 Button("取消", role: .cancel) {}
@@ -196,6 +187,8 @@ struct ArchiveSettingsView: View {
             } message: {
                 Text("删除后不可恢复，回到存档列表。")
             }
+            }
+            .navigationBarHidden(true)
         }
     }
 }
