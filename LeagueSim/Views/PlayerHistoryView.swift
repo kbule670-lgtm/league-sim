@@ -8,6 +8,8 @@ struct PlayerHistoryView: View {
     var playerId: UUID
     var playerName: String
     @EnvironmentObject private var store: LeagueStore
+    @State private var foldHonors = true
+    @State private var foldSeasonRows = true
 
     private var rows: [(seasonNumber: Int, stat: PlayerSeasonStat)] {
         guard let league = store.currentLeague else { return [] }
@@ -29,7 +31,11 @@ struct PlayerHistoryView: View {
 
     var body: some View {
         List {
-            Section("个人荣誉") {
+            Section {
+                Button { foldHonors.toggle() } label: {
+                    HStack { Text("个人荣誉"); Spacer(); Image(systemName: foldHonors ? "chevron.down" : "chevron.right") }
+                }
+                if foldHonors {
                 let champs = honors.filter { $0.type == "总冠军" }
                 let fmvps = honors.filter { $0.type == "FMVP" }
                 Text("总冠军 \(champs.count) 次 · FMVP \(fmvps.count) 次")
@@ -42,12 +48,18 @@ struct PlayerHistoryView: View {
                     Text("\(h.type)：第 \(h.seasonNumber) 赛季 · \(h.teamName) \(h.detail)").font(.caption)
                 }
             }
+            }
             if rows.isEmpty {
                 Section {
                     Text("还没有 \(playerName) 的赛季数据：去“模拟”跑完一赛季，这里就会按赛季列出来。")
                         .foregroundStyle(.secondary)
                 }
             } else {
+                Section {
+                    Button { foldSeasonRows.toggle() } label: {
+                        HStack { Text("各赛季数据"); Spacer(); Image(systemName: foldSeasonRows ? "chevron.down" : "chevron.right") }
+                    }
+                    if foldSeasonRows {
                 ForEach(rows, id: \.seasonNumber) { row in
                     let stat = row.stat
                     VStack(alignment: .leading) {
@@ -67,6 +79,8 @@ struct PlayerHistoryView: View {
                                         stat.freeThrowPercentage * 100))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
+                    }
+                }
                     }
                 }
             }
