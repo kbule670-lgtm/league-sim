@@ -57,12 +57,16 @@ struct TeamsView: View {
                 teamSections
             }
             .navigationTitle("球队")
+            // 顶栏只放 ToolbarItem、不混普通 Button：混搭是编译器算不过来的可疑点。
+            // 退出在左、填测试名单在右，样子不变。
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     ExitArchiveButton()
                 }
-                Button("全部填测试名单") {
-                    store.fillTestRostersForAllEmptyTeams()
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("全部填测试名单") {
+                        store.fillTestRostersForAllEmptyTeams()
+                    }
                 }
             }
         }
