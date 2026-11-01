@@ -38,7 +38,10 @@ enum SimulationEngine {
         case 5: return 22
         case 6: return 20
         case 7: return 18
-        default: return 14
+        case 8: return 16
+        case 9: return 12
+        case 10: return 10
+        default: return 8
         }
     }
 
@@ -216,7 +219,7 @@ enum SimulationEngine {
                               leagueAverage: leagueAverage, rng: &rng)
         if homeWins && homeScore <= awayScore { homeScore = awayScore + rng.nextInt(in: 1...8) }
         if !homeWins && awayScore <= homeScore { awayScore = homeScore + rng.nextInt(in: 1...8) }
-        let box = boxScore(home: home, away: away,
+        let box = boxScore(home: home, homePlaying: home.activeRoster, away: away, awayPlaying: away.activeRoster,
                            homeScore: homeScore, awayScore: awayScore, rng: &rng)
         return Game(id: UUID(), homeTeamId: home.id, homeTeamName: home.name,
                     awayTeamId: away.id, awayTeamName: away.name,
@@ -314,6 +317,7 @@ enum SimulationEngine {
                 total.totalThreeAttempted += stat.threeAttempted
                 total.totalFreeThrowsMade += stat.freeThrowsMade
                 total.totalFreeThrowsAttempted += stat.freeThrowsAttempted
+                total.totalFouls += stat.fouls
                 playerTotals[stat.playerId] = total
             }
         }
@@ -432,9 +436,13 @@ enum SimulationEngine {
             championTeamName = finals.winner.name
         }
 
+        var playerStatsWithPosition = playerStats
+        var posMap: [UUID: String] = [:]
+        for team in league.teams { for slot in team.roster { posMap[slot.player.id] = slot.player.position.rawValue } }
+        for i in playerStatsWithPosition.indices { playerStatsWithPosition[i].position = posMap[playerStatsWithPosition[i].playerId] ?? "" }
         let snapshot = SeasonSnapshot(id: snapshotId, seasonNumber: league.nextSeasonNumber,
                                       seed: seed, settings: settings, games: games,
-                                      teamStats: teamStats, playerStats: playerStats,
+                                      teamStats: teamStats, playerStats: playerStatsWithPosition,
                                       playoffGames: playoffGames, playoffSeries: playoffSeries,
                                       championTeamId: championTeamId, championTeamName: championTeamName,
                                       createdAt: Date())
@@ -456,11 +464,10 @@ enum SimulationEngine {
     // 以前只用总评^1.5 且不看时间，替补和首发得分拉不开，用户反馈后改成这样。
     // 得分定下来后，再把每人的得分拆成两分/三分/罚球（见 decomposeShooting），
     // 保证 2*两分命中 + 3*三分命中 + 罚球命中 = 该球员得分，一分不差。
-    private static func boxScore(home: Team, away: Team, homeScore: Int, awayScore: Int,
+    static func boxScore(home: Team, homePlaying: [RosterSlot], away: Team, awayPlaying: [RosterSlot], homeScore: Int, awayScore: Int,
                                  rng: inout SeededRandom) -> [PlayerGameStat] {
         var result: [PlayerGameStat] = []
-        for (team, teamScore) in [(home, homeScore), (away, awayScore)] {
-            let active = team.activeRoster
+        for (team, teamScore, active) in [(home, homeScore, homePlaying), (away, awayScore, awayPlaying)] {
             guard !active.isEmpty else { continue }
             let weights = active.map { slot in
                 pow(Double(Rating.overall(for: slot.player)), 3.0)
@@ -497,6 +504,16 @@ enum SimulationEngine {
                                             points: Int(rawPoints.rounded()), rebounds: rebounds,
                                             assists: assists, steals: steals, blocks: blocks))
             }
+            for foulIndex in stats.indices {
+                let foulPlayer = players[foulIndex]
+                let foulMinutes = Double(stats[foulIndex].minutes)
+                let defense = Double(foulPlayer.attributes.perimeterDefense + foulPlayer.attributes.rimProtection) / 2.0
+                let expected = foulMinutes * 0.07 * (0.8 + defense / 200.0) * (0.7 + rng.nextDouble() * 0.6)
+                var foulCount = Int(expected.rounded())
+                if foulCount < 0 { foulCount = 0 }
+                if foulCount > 6 { foulCount = 6 }
+                stats[foulIndex].fouls = foulCount
+            }
             let diff = teamScore - stats.map { $0.points }.reduce(0, +)
             if let topIndex = stats.indices.max(by: { stats[$0].points < stats[$1].points }) {
                 stats[topIndex].points += diff
@@ -517,6 +534,191 @@ enum SimulationEngine {
             result.append(contentsOf: stats)
         }
         return result
+    }
+
+
+    // MARK: - 进行中赛季：轮休、单场、汇总、奖项（供 LeagueStore 逐场调用）
+    // 轮休：常规赛每场上 10-11 人，首发一赛季轮休封顶 10 场、其他人封顶 20 场；
+    // 封顶的球员必须上场，其余按“首发权重高、已轮休多的人更该上”加权抽；
+    // 季后赛上 9 人，不计轮休。
+    static func playingRoster(for team: Team, isPlayoff: Bool, restCounts: inout [String: Int], rng: inout SeededRandom) -> [RosterSlot] {
+        let active = team.activeRoster
+        if isPlayoff { return Array(active.prefix(9)) }
+        if active.count <= 11 { return active }
+        let playCount = rng.nextDouble() < 0.5 ? 10 : 11
+        func cap(for slot: RosterSlot) -> Int { slot.status == .starter ? 10 : 20 }
+        var mustPlay: [RosterSlot] = []
+        var others: [RosterSlot] = []
+        for slot in active {
+            let rests = restCounts[slot.player.id.uuidString] ?? 0
+            if rests >= cap(for: slot) { mustPlay.append(slot) } else { others.append(slot) }
+        }
+        var playing = mustPlay
+        var remaining = playCount - playing.count
+        if remaining < 0 { remaining = 0 }
+        // 加权抽：首发权重 4、替补 1.5，再乘 (1 + 已轮休/5)，轮休多的人更优先上场，避免超封顶。
+        var pool = others
+        while remaining > 0 && !pool.isEmpty {
+            let weights = pool.map { slot -> Double in
+                let base = slot.status == .starter ? 4.0 : 1.5
+                let rests = Double(restCounts[slot.player.id.uuidString] ?? 0)
+                return base * (1.0 + rests / 5.0)
+            }
+            let total = weights.reduce(0, +)
+            var roll = rng.nextDouble() * total
+            var picked = 0
+            for i in weights.indices {
+                roll -= weights[i]
+                if roll <= 0 { picked = i; break }
+                picked = i
+            }
+            playing.append(pool.remove(at: picked))
+            remaining -= 1
+        }
+        // 没上场的记一次轮休
+        let playingIds = Set(playing.map { $0.player.id })
+        for slot in active where !playingIds.contains(slot.player.id) {
+            restCounts[slot.player.id.uuidString, default: 0] += 1
+        }
+        return playing.sorted { $0.rotationOrder < $1.rotationOrder }
+    }
+
+    static func playSingleGame(home: Team, away: Team, ratings: [UUID: Double], leagueAverage: Double, settings: LeagueSettings, isPlayoff: Bool, restCounts: inout [String: Int], rng: inout SeededRandom) -> Game {
+        let homeRating = ratings[home.id] ?? 0
+        let awayRating = ratings[away.id] ?? 0
+        let homeWinProb = 1.0 / (1.0 + exp(-(homeRating - leagueAverage) / 8.0))
+        let awayWinProb = 1.0 / (1.0 + exp(-(awayRating - leagueAverage) / 8.0))
+        let edge = (homeWinProb - awayWinProb) * 0.5
+        let roll = rng.nextDouble()
+        let homeWins = roll < (0.5 + edge)
+        var homeScore = score(for: homeRating, isHome: true, settings: settings, leagueAverage: leagueAverage, rng: &rng)
+        var awayScore = score(for: awayRating, isHome: false, settings: settings, leagueAverage: leagueAverage, rng: &rng)
+        if homeWins && homeScore <= awayScore { homeScore = awayScore + rng.nextInt(in: 1...8) }
+        if !homeWins && awayScore <= homeScore { awayScore = homeScore + rng.nextInt(in: 1...8) }
+        let homePlaying = playingRoster(for: home, isPlayoff: isPlayoff, restCounts: &restCounts, rng: &rng)
+        let awayPlaying = playingRoster(for: away, isPlayoff: isPlayoff, restCounts: &restCounts, rng: &rng)
+        let box = boxScore(home: home, homePlaying: homePlaying, away: away, awayPlaying: awayPlaying, homeScore: homeScore, awayScore: awayScore, rng: &rng)
+        return Game(id: UUID(), homeTeamId: home.id, homeTeamName: home.name, awayTeamId: away.id, awayTeamName: away.name, homeScore: homeScore, awayScore: awayScore, boxScore: box)
+    }
+
+    static func playSeriesWithPlaying(higher: Team, higherSeed: Int, lower: Team, lowerSeed: Int, round: String, conferenceName: String, ratings: [UUID: Double], leagueAverage: Double, settings: LeagueSettings, rng: inout SeededRandom, restCounts: inout [String: Int]) -> (series: PlayoffSeries, games: [Game], winner: Team) {
+        var higherWins = 0
+        var lowerWins = 0
+        var games: [Game] = []
+        var gameIndex = 0
+        while higherWins < 4 && lowerWins < 4 && gameIndex < 7 {
+            let higherIsHome = gameIndex == 0 || gameIndex == 1 || gameIndex == 4 || gameIndex == 6
+            let home = higherIsHome ? higher : lower
+            let away = higherIsHome ? lower : higher
+            let game = playSingleGame(home: home, away: away, ratings: ratings, leagueAverage: leagueAverage, settings: settings, isPlayoff: true, restCounts: &restCounts, rng: &rng)
+            games.append(game)
+            if game.homeScore > game.awayScore {
+                if higherIsHome { higherWins += 1 } else { lowerWins += 1 }
+            } else {
+                if higherIsHome { lowerWins += 1 } else { higherWins += 1 }
+            }
+            gameIndex += 1
+        }
+        let winner = higherWins == 4 ? higher : lower
+        let series = PlayoffSeries(id: UUID(), round: round, conference: conferenceName, higherSeed: higherSeed, higherSeedTeamId: higher.id, higherSeedTeamName: higher.name, lowerSeed: lowerSeed, lowerSeedTeamId: lower.id, lowerSeedTeamName: lower.name, higherWins: higherWins, lowerWins: lowerWins, winnerTeamId: winner.id, winnerTeamName: winner.name, gameIds: games.map { $0.id })
+        return (series, games, winner)
+    }
+
+    static func aggregateTeamStats(games: [Game], participants: [Team]) -> [TeamSeasonStat] {
+        var wins: [UUID: Int] = [:]; var losses: [UUID: Int] = [:]; var pf: [UUID: Int] = [:]; var pa: [UUID: Int] = [:]
+        for game in games {
+            let homeWins = game.homeScore > game.awayScore
+            wins[game.homeTeamId, default: 0] += homeWins ? 1 : 0
+            losses[game.homeTeamId, default: 0] += homeWins ? 0 : 1
+            wins[game.awayTeamId, default: 0] += homeWins ? 0 : 1
+            losses[game.awayTeamId, default: 0] += homeWins ? 1 : 0
+            pf[game.homeTeamId, default: 0] += game.homeScore; pa[game.homeTeamId, default: 0] += game.awayScore
+            pf[game.awayTeamId, default: 0] += game.awayScore; pa[game.awayTeamId, default: 0] += game.homeScore
+        }
+        return participants.map { team in
+            TeamSeasonStat(teamId: team.id, teamName: team.name, division: team.division, conference: conference(for: team, in: participants).rawValue, wins: wins[team.id] ?? 0, losses: losses[team.id] ?? 0, pointsFor: pf[team.id] ?? 0, pointsAgainst: pa[team.id] ?? 0)
+        }
+    }
+
+    static func aggregatePlayerStats(games: [Game], seasonId: UUID, positionMap: [UUID: String] = [:]) -> [PlayerSeasonStat] {
+        var totals: [UUID: PlayerSeasonStat] = [:]
+        var teamNameMap: [UUID: String] = [:]; var teamIdMap: [UUID: UUID] = [:]; var nameMap: [UUID: String] = [:]
+        for game in games {
+            for stat in game.boxScore {
+                nameMap[stat.playerId] = stat.playerName
+                teamIdMap[stat.playerId] = stat.teamId
+                teamNameMap[stat.playerId] = stat.teamId == game.homeTeamId ? game.homeTeamName : game.awayTeamName
+                var total = totals[stat.playerId] ?? PlayerSeasonStat(playerId: stat.playerId, playerName: stat.playerName, teamId: stat.teamId, teamName: "", seasonId: seasonId, games: 0, totalPoints: 0, totalRebounds: 0, totalAssists: 0, totalSteals: 0, totalBlocks: 0, totalMinutes: 0)
+                total.games += 1; total.totalPoints += stat.points; total.totalRebounds += stat.rebounds; total.totalAssists += stat.assists; total.totalSteals += stat.steals; total.totalBlocks += stat.blocks; total.totalMinutes += stat.minutes
+                total.totalFieldGoalsMade += stat.fieldGoalsMade; total.totalFieldGoalsAttempted += stat.fieldGoalsAttempted; total.totalThreeMade += stat.threeMade; total.totalThreeAttempted += stat.threeAttempted; total.totalFreeThrowsMade += stat.freeThrowsMade; total.totalFreeThrowsAttempted += stat.freeThrowsAttempted; total.totalFouls += stat.fouls
+                totals[stat.playerId] = total
+            }
+        }
+        return totals.values.map { stat -> PlayerSeasonStat in
+            var copy = stat; copy.seasonId = seasonId; copy.teamName = teamNameMap[stat.playerId] ?? ""; copy.teamId = teamIdMap[stat.playerId] ?? stat.teamId; copy.playerName = nameMap[stat.playerId] ?? stat.playerName; copy.position = positionMap[stat.playerId] ?? ""; return copy
+        }.sorted { $0.pointsPerGame > $1.pointsPerGame }
+    }
+
+    static func sortedStandings(participants: [Team], teamStats: [TeamSeasonStat]) -> [Team] {
+        let statMap = Dictionary(uniqueKeysWithValues: teamStats.map { ($0.teamId, $0) })
+        let order = Dictionary(uniqueKeysWithValues: participants.enumerated().map { ($1.id, $0) })
+        return participants.sorted {
+            let l = statMap[$0.id]; let r = statMap[$1.id]
+            if (l?.wins ?? 0) != (r?.wins ?? 0) { return (l?.wins ?? 0) > (r?.wins ?? 0) }
+            if (l?.pointDiff ?? 0) != (r?.pointDiff ?? 0) { return (l?.pointDiff ?? 0) > (r?.pointDiff ?? 0) }
+            if (l?.pointsFor ?? 0) != (r?.pointsFor ?? 0) { return (l?.pointsFor ?? 0) > (r?.pointsFor ?? 0) }
+            return (order[$0.id] ?? 0) < (order[$1.id] ?? 0)
+        }
+    }
+
+    static func playoffRoundName(_ round: Int) -> String {
+        switch round { case 1: return "首轮"; case 2: return "分区半决赛"; case 3: return "分区决赛"; case 4: return "总决赛"; default: return "季后赛" }
+    }
+
+    // 奖项：得分王/篮板王/助攻王/抢断王/盖帽王按场均最高（出场至少一半，凑不够就全算）；
+    // DPOY 按抢断+盖帽综合；MVP 按场均分+板+助×1.5+抢断×2+盖帽×2+球队胜场×0.15；
+    // 最佳阵容按每个位置场均分排前三；FMVP 按总决赛场均分最高。
+    static func computeAwards(regularPlayerStats: [PlayerSeasonStat], regularTeamStats: [TeamSeasonStat], playoffGames: [Game], finalsGames: [Game], snapshotId: UUID, positionMap: [UUID: String]) -> (awards: [SeasonAward], first: [AllNBAEntry], second: [AllNBAEntry], third: [AllNBAEntry], leaders: [SeasonLeader], playoffPlayerStats: [PlayerSeasonStat], fmvpPlayerId: UUID?) {
+        let maxGames = regularPlayerStats.map { $0.games }.max() ?? 0
+        let threshold = max(1, maxGames / 2)
+        let eligible = regularPlayerStats.filter { $0.games >= threshold }
+        let pool = eligible.isEmpty ? regularPlayerStats : eligible
+        func leader(_ key: (PlayerSeasonStat) -> Double) -> PlayerSeasonStat? { pool.max(by: { key($0) < key($1) }) }
+        func fmt(_ v: Double) -> String { String(format: "%.1f", v) }
+        var awards: [SeasonAward] = []
+        var leaders: [SeasonLeader] = []
+        if let s = leader({ $0.pointsPerGame }) { awards.append(SeasonAward(title: "得分王", playerId: s.playerId, playerName: s.playerName, teamName: s.teamName, valueText: "场均 \(fmt(s.pointsPerGame)) 分")); leaders.append(SeasonLeader(category: "得分王", playerName: s.playerName, teamName: s.teamName, perGame: s.pointsPerGame, valueText: "场均 \(fmt(s.pointsPerGame)) 分")) }
+        if let s = leader({ $0.reboundsPerGame }) { awards.append(SeasonAward(title: "篮板王", playerId: s.playerId, playerName: s.playerName, teamName: s.teamName, valueText: "场均 \(fmt(s.reboundsPerGame)) 板")); leaders.append(SeasonLeader(category: "篮板王", playerName: s.playerName, teamName: s.teamName, perGame: s.reboundsPerGame, valueText: "场均 \(fmt(s.reboundsPerGame)) 板")) }
+        if let s = leader({ $0.assistsPerGame }) { awards.append(SeasonAward(title: "助攻王", playerId: s.playerId, playerName: s.playerName, teamName: s.teamName, valueText: "场均 \(fmt(s.assistsPerGame)) 助")); leaders.append(SeasonLeader(category: "助攻王", playerName: s.playerName, teamName: s.teamName, perGame: s.assistsPerGame, valueText: "场均 \(fmt(s.assistsPerGame)) 助")) }
+        if let s = leader({ $0.stealsPerGame }) { leaders.append(SeasonLeader(category: "抢断王", playerName: s.playerName, teamName: s.teamName, perGame: s.stealsPerGame, valueText: "场均 \(fmt(s.stealsPerGame)) 断")) }
+        if let s = leader({ $0.blocksPerGame }) { leaders.append(SeasonLeader(category: "盖帽王", playerName: s.playerName, teamName: s.teamName, perGame: s.blocksPerGame, valueText: "场均 \(fmt(s.blocksPerGame)) 帽")) }
+        let winsMap = Dictionary(uniqueKeysWithValues: regularTeamStats.map { ($0.teamId, $0.wins) })
+        if let mvp = pool.max(by: { ($0.pointsPerGame + $0.reboundsPerGame + $0.assistsPerGame * 1.5 + $0.stealsPerGame * 2 + $0.blocksPerGame * 2 + Double(winsMap[$0.teamId] ?? 0) * 0.15) < ($1.pointsPerGame + $1.reboundsPerGame + $1.assistsPerGame * 1.5 + $1.stealsPerGame * 2 + $1.blocksPerGame * 2 + Double(winsMap[$1.teamId] ?? 0) * 0.15) }) {
+            awards.insert(SeasonAward(title: "MVP", playerId: mvp.playerId, playerName: mvp.playerName, teamName: mvp.teamName, valueText: "场均 \(fmt(mvp.pointsPerGame)) 分 \(fmt(mvp.reboundsPerGame)) 板 \(fmt(mvp.assistsPerGame)) 助"), at: 0)
+        }
+        if let dpoy = pool.max(by: { ($0.stealsPerGame + $0.blocksPerGame) < ($1.stealsPerGame + $1.blocksPerGame) }) {
+            awards.append(SeasonAward(title: "DPOY", playerId: dpoy.playerId, playerName: dpoy.playerName, teamName: dpoy.teamName, valueText: "场均 \(fmt(dpoy.stealsPerGame)) 断 \(fmt(dpoy.blocksPerGame)) 帽"))
+        }
+        // 最佳阵容：位置按 playerStats.position，空的按联赛当前名单补（positionMap），再空按控卫。
+        var first: [AllNBAEntry] = []; var second: [AllNBAEntry] = []; var third: [AllNBAEntry] = []
+        let positions = ["PG", "SG", "SF", "PF", "C"]
+        let positionNames = ["PG": "控卫", "SG": "分卫", "SF": "小前", "PF": "大前", "C": "中锋"]
+        for pos in positions {
+            let group = pool.filter { ($0.position.isEmpty ? (positionMap[$0.playerId] ?? "PG") : $0.position) == pos }.sorted { $0.pointsPerGame > $1.pointsPerGame }
+            if group.indices.contains(0) { first.append(AllNBAEntry(playerName: group[0].playerName, teamName: group[0].teamName, position: positionNames[pos] ?? pos)) }
+            if group.indices.contains(1) { second.append(AllNBAEntry(playerName: group[1].playerName, teamName: group[1].teamName, position: positionNames[pos] ?? pos)) }
+            if group.indices.contains(2) { third.append(AllNBAEntry(playerName: group[2].playerName, teamName: group[2].teamName, position: positionNames[pos] ?? pos)) }
+        }
+        let playoffPlayerStats = aggregatePlayerStats(games: playoffGames, seasonId: snapshotId, positionMap: positionMap)
+        var fmvpId: UUID? = nil
+        if !finalsGames.isEmpty {
+            let finalsStats = aggregatePlayerStats(games: finalsGames, seasonId: snapshotId, positionMap: positionMap)
+            if let fmvp = finalsStats.max(by: { $0.pointsPerGame < $1.pointsPerGame }) {
+                fmvpId = fmvp.playerId
+                awards.append(SeasonAward(title: "FMVP", playerId: fmvp.playerId, playerName: fmvp.playerName, teamName: fmvp.teamName, valueText: "总决赛场均 \(fmt(fmvp.pointsPerGame)) 分"))
+            }
+        }
+        return (awards, first, second, third, leaders, playoffPlayerStats, fmvpId)
     }
 
     // 把一名球员的单场得分拆成投篮：两分命中、三分命中、罚球命中。
