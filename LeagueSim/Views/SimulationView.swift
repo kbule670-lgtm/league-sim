@@ -136,7 +136,7 @@ struct SimulationView: View {
                 }
                 if foldLeaderboard {
                 Picker("类别", selection: $leaderCategory) {
-                    ForEach(["得分", "篮板", "助攻", "抢断", "盖帽", "投篮命中率", "三分命中率", "罚球命中率"], id: \.self) { Text($0) }
+                    ForEach(["得分", "总得分", "篮板", "助攻", "抢断", "盖帽", "投篮命中率", "三分命中率", "罚球命中率"], id: \.self) { Text($0) }
                 }
                 Picker("常规赛 / 季后赛", selection: $leaderPlayoff) {
                     Text("常规赛").tag(false); Text("季后赛").tag(true)
@@ -199,6 +199,7 @@ struct SimulationView: View {
     private func sortedLeaderboard(_ stats: [PlayerSeasonStat], category: String) -> [PlayerSeasonStat] {
         switch category {
         case "得分": return stats.sorted { $0.pointsPerGame > $1.pointsPerGame }
+        case "总得分": return stats.sorted { $0.totalPoints > $1.totalPoints }
         case "篮板": return stats.sorted { $0.reboundsPerGame > $1.reboundsPerGame }
         case "助攻": return stats.sorted { $0.assistsPerGame > $1.assistsPerGame }
         case "抢断": return stats.sorted { $0.stealsPerGame > $1.stealsPerGame }
@@ -213,6 +214,7 @@ struct SimulationView: View {
     private func leaderboardValue(_ stat: PlayerSeasonStat, category: String) -> String {
         switch category {
         case "得分": return String(format: "场均 %.1f 分", stat.pointsPerGame)
+        case "总得分": return String(format: "累计 %d 分 · 出场 %d 场", stat.totalPoints, stat.games)
         case "篮板": return String(format: "场均 %.1f 板", stat.reboundsPerGame)
         case "助攻": return String(format: "场均 %.1f 助", stat.assistsPerGame)
         case "抢断": return String(format: "场均 %.1f 断", stat.stealsPerGame)
@@ -273,6 +275,7 @@ struct HistoryView: View {
     private func historyRankedStats(stats: [PlayerSeasonStat], category: String) -> [PlayerSeasonStat] {
         switch category {
         case "得分": return stats.filter { $0.games >= 82 }.sorted { $0.pointsPerGame > $1.pointsPerGame }
+        case "总得分": return stats.sorted { $0.totalPoints > $1.totalPoints }
         case "篮板": return stats.filter { $0.games >= 82 }.sorted { $0.reboundsPerGame > $1.reboundsPerGame }
         case "助攻": return stats.filter { $0.games >= 82 }.sorted { $0.assistsPerGame > $1.assistsPerGame }
         case "抢断": return stats.filter { $0.games >= 82 }.sorted { $0.stealsPerGame > $1.stealsPerGame }
@@ -287,6 +290,7 @@ struct HistoryView: View {
     private func historyLeaderValueText(stat: PlayerSeasonStat, category: String) -> String {
         switch category {
         case "得分": return String(format: "场均 %.1f 分 · 出场 %d 场", stat.pointsPerGame, stat.games)
+        case "总得分": return String(format: "累计 %d 分 · 出场 %d 场", stat.totalPoints, stat.games)
         case "篮板": return String(format: "场均 %.1f 板 · 出场 %d 场", stat.reboundsPerGame, stat.games)
         case "助攻": return String(format: "场均 %.1f 助 · 出场 %d 场", stat.assistsPerGame, stat.games)
         case "抢断": return String(format: "场均 %.1f 断 · 出场 %d 场", stat.stealsPerGame, stat.games)
@@ -350,7 +354,7 @@ struct HistoryView: View {
                         }
                         if foldHistoryLeaderboard {
                             Picker("数据", selection: $historyLeaderCategory) {
-                                ForEach(["得分", "篮板", "助攻", "抢断", "盖帽", "投篮", "三分", "罚球"], id: \.self) { Text($0) }
+                                ForEach(["得分", "总得分", "篮板", "助攻", "抢断", "盖帽", "投篮", "三分", "罚球"], id: \.self) { Text($0) }
                             }
                             .pickerStyle(.segmented)
                             let aggregated = historyAggregatedStats(seasons: seasons)
@@ -365,7 +369,7 @@ struct HistoryView: View {
                                     Text(historyLeaderValueText(stat: stat, category: historyLeaderCategory)).font(.caption).foregroundStyle(.secondary)
                                 }
                             }
-                            Text("计分榜按场均排（累计出场至少 82 场）；命中率榜按命中率排（累计出手至少 300 次），老快照投篮为 0 的不进命中率榜。").font(.caption).foregroundStyle(.secondary)
+                            Text("得分榜按场均排（累计出场至少 82 场），总得分榜按累计总分排（不设出场门槛）；命中率榜按命中率排（累计出手至少 300 次），老快照投篮为 0 的不进命中率榜。").font(.caption).foregroundStyle(.secondary)
                         }
                     }
                     if let season = selected {
