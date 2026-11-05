@@ -50,9 +50,7 @@ final class LeagueStore: ObservableObject {
     }
 
     // MARK: 切换（先存后载）
-    // 修复“1、2、3 全点了都进不去”：以前在主线程同步解码，文件大时会卡住、
-    // 解码失败时又静默 return，界面看起来就是点了没反应。现在改成：
-    // 后台解码（主线程不卡，能看到“正在进入”）、失败弹具体错误、重复点按直接忽略。
+    // 切换在后台解码，失败弹具体错误，重复点按直接忽略。
     func enterArchive(id: UUID) {
         guard !isEnteringArchive else { return }
         if let current = currentLeague { save(current) }
@@ -162,6 +160,7 @@ final class LeagueStore: ObservableObject {
                   let slotIndex = league.teams[fromIndex].roster.firstIndex(
                     where: { $0.player.id == playerId }) else { return }
             let slot = league.teams[fromIndex].roster[slotIndex]
+            guard !slot.player.isRetired else { return }
             guard !league.teams[toIndex].roster.contains(where: { $0.player.id == playerId }),
                   !league.teams[toIndex].roster.contains(
                     where: { $0.player.jerseyNumber == slot.player.jerseyNumber }) else { return }
@@ -171,6 +170,7 @@ final class LeagueStore: ObservableObject {
             moved.status = status
             moved.rotationOrder = nextOrder
             league.teams[toIndex].roster.append(moved)
+            league.tradeHistory.append(TradeRecord(seasonNumber: league.nextSeasonNumber - 1, fromTeamName: league.teams[fromIndex].name, toTeamName: league.teams[toIndex].name, outPlayerNames: [slot.player.name], inPlayerNames: [], isAuto: false))
             success = true
         }
         return success
@@ -212,9 +212,8 @@ final class LeagueStore: ObservableObject {
                 attrs.basketballIQ = min(99, base + 1)
                 attrs.durability = min(99, base + 5)
                 attrs.potential = min(99, base + 8)
-                let player = Player(name: "测试球员 \(offset + 1)", jerseyNumber: offset + 1,
+                let player = Player(name: "测试球员 \(offset + 1)", jerseyNumber: "\(offset + 1)",
                                     position: position, age: 24 + offset % 8,
-                                    heightCm: 190 + offset % 20, weightKg: 85 + offset % 20,
                                     attributes: attrs)
                 slots.append(RosterSlot(player: player,
                                         status: offset < 5 ? .starter : .bench,
@@ -244,9 +243,8 @@ final class LeagueStore: ObservableObject {
                     attrs.basketballIQ = min(99, base + 1)
                     attrs.durability = min(99, base + 5)
                     attrs.potential = min(99, base + 8)
-                    let player = Player(name: "测试球员 \(offset + 1)", jerseyNumber: offset + 1,
+                    let player = Player(name: "测试球员 \(offset + 1)", jerseyNumber: "\(offset + 1)",
                                         position: position, age: 24 + offset % 8,
-                                        heightCm: 190 + offset % 20, weightKg: 85 + offset % 20,
                                         attributes: attrs)
                     slots.append(RosterSlot(player: player,
                                             status: offset < 5 ? .starter : .bench,
@@ -274,6 +272,16 @@ final class LeagueStore: ObservableObject {
         return (result.snapshot, result.skippedTeams)
     }
 
+    // 清除历史：只清赛季快照、进行中的赛季和交易记录，球员名单和球队资料保留。
+    func clearHistory() {
+        updateCurrent { league in
+            league.seasons = []
+            league.ongoingSeason = nil
+            league.tradeHistory = []
+            league.nextSeasonNumber = 1
+        }
+    }
+
     // MARK: - 存档复制
     func copyArchive(id: UUID) {
         guard var league = ArchiveStore.loadLeague(id: id) else { return }
@@ -297,6 +305,7 @@ final class LeagueStore: ObservableObject {
             let outSlots = league.teams[fromIndex].roster.filter { outPlayerIds.contains($0.player.id) }
             let inSlots = league.teams[toIndex].roster.filter { inPlayerIds.contains($0.player.id) }
             guard outSlots.count == outPlayerIds.count, inSlots.count == inPlayerIds.count else { return }
+            guard !outSlots.contains(where: { $0.player.isRetired }) && !inSlots.contains(where: { $0.player.isRetired }) else { return }
             // 互换后校验：去掉换出的人、加上换入的人，队内不能有重复球衣号或重复球员。
             func check(teamRoster: [RosterSlot], removeIds: [UUID], addSlots: [RosterSlot]) -> Bool {
                 let remaining = teamRoster.filter { !removeIds.contains($0.player.id) }
@@ -313,6 +322,7 @@ final class LeagueStore: ObservableObject {
             let toNext = (league.teams[toIndex].roster.map { $0.rotationOrder }.max() ?? 0) + 1
             for (i, var slot) in inSlots.enumerated() { slot.rotationOrder = fromNext + i; league.teams[fromIndex].roster.append(slot) }
             for (i, var slot) in outSlots.enumerated() { slot.rotationOrder = toNext + i; league.teams[toIndex].roster.append(slot) }
+            league.tradeHistory.append(TradeRecord(seasonNumber: league.nextSeasonNumber - 1, fromTeamName: league.teams[fromIndex].name, toTeamName: league.teams[toIndex].name, outPlayerNames: outSlots.map { $0.player.name }, inPlayerNames: inSlots.map { $0.player.name }, isAuto: false))
             success = true
         }
         return success
@@ -332,7 +342,7 @@ final class LeagueStore: ObservableObject {
         var settings = league.settings
         settings.lastSeed = seed
         league.settings = settings
-        let pairs = SimulationEngine.regularSeasonSchedule(participants: participants)
+        let pairs = SimulationEngine.shuffledSchedule(SimulationEngine.regularSeasonSchedule(participants: participants), seed: seed)
         let schedule = pairs.enumerated().map { ScheduledGame(id: UUID(), index: $0.offset, homeTeamId: $0.element.home.id, awayTeamId: $0.element.away.id, playedGameId: nil) }
         league.ongoingSeason = OngoingSeason(id: UUID(), seasonNumber: league.nextSeasonNumber, seed: seed, settings: settings, schedule: schedule, playedGames: [], playoffGames: [], playoffSeries: [], playoffRound: 0, restCounts: [:])
         league.updatedAt = Date()
@@ -345,13 +355,18 @@ final class LeagueStore: ObservableObject {
         updateCurrent { league in league.ongoingSeason = nil }
     }
 
-    private func playRegularScheduled(_ league: inout League, scheduled: ScheduledGame) {
+    private func playRegularScheduled(_ league: inout League, scheduled: ScheduledGame, precomputedRatings: ([UUID: Double], Double)? = nil) {
         guard var ongoing = league.ongoingSeason else { return }
         guard let home = league.teams.first(where: { $0.id == scheduled.homeTeamId }),
               let away = league.teams.first(where: { $0.id == scheduled.awayTeamId }) else { return }
         guard !home.activeRoster.isEmpty && !away.activeRoster.isEmpty else { return }
-        let participants = league.teams.filter { $0.activeRoster.count >= 5 }
-        let (ratings, avg) = ratingsForOngoing(league, participants: participants)
+        let (ratings, avg): ([UUID: Double], Double)
+        if let pre = precomputedRatings {
+            (ratings, avg) = pre
+        } else {
+            let participants = league.teams.filter { $0.activeRoster.count >= 5 }
+            (ratings, avg) = ratingsForOngoing(league, participants: participants)
+        }
         var rng = SeededRandom(seed: ongoing.seed &+ Int64(scheduled.index + 1) * 1000003)
         var rest = ongoing.restCounts
         let game = SimulationEngine.playSingleGame(home: home, away: away, ratings: ratings, leagueAverage: avg, settings: ongoing.settings, isPlayoff: false, restCounts: &rest, rng: &rng)
@@ -369,12 +384,28 @@ final class LeagueStore: ObservableObject {
         }
     }
 
+    // 单场模拟并返回打完的比赛（虚拟播报用：先模拟出结果，再播这场比赛）。
+    func simulateRegularGameReturning(scheduledId: UUID) -> Game? {
+        var result: Game? = nil
+        updateCurrent { league in
+            guard let ongoing = league.ongoingSeason,
+                  let scheduled = ongoing.schedule.first(where: { $0.id == scheduledId && $0.playedGameId == nil }) else { return }
+            playRegularScheduled(&league, scheduled: scheduled)
+            if let gameId = league.ongoingSeason?.schedule.first(where: { $0.id == scheduledId })?.playedGameId {
+                result = league.ongoingSeason?.playedGames.first { $0.id == gameId }
+            }
+        }
+        return result
+    }
+
     func simulateRegularGamesUpTo(scheduledId: UUID) {
         updateCurrent { league in
             guard let ongoing = league.ongoingSeason,
                   let target = ongoing.schedule.first(where: { $0.id == scheduledId }) else { return }
             let targets = ongoing.schedule.filter { $0.index <= target.index && $0.playedGameId == nil }.sorted { $0.index < $1.index }
-            for scheduled in targets { playRegularScheduled(&league, scheduled: scheduled) }
+            let participants = league.teams.filter { $0.activeRoster.count >= 5 }
+            let pre = ratingsForOngoing(league, participants: participants)
+            for scheduled in targets { playRegularScheduled(&league, scheduled: scheduled, precomputedRatings: pre) }
         }
     }
 
@@ -382,7 +413,9 @@ final class LeagueStore: ObservableObject {
         updateCurrent { league in
             guard let ongoing = league.ongoingSeason else { return }
             let targets = ongoing.schedule.filter { $0.playedGameId == nil }.sorted { $0.index < $1.index }
-            for scheduled in targets { playRegularScheduled(&league, scheduled: scheduled) }
+            let participants = league.teams.filter { $0.activeRoster.count >= 5 }
+            let pre = ratingsForOngoing(league, participants: participants)
+            for scheduled in targets { playRegularScheduled(&league, scheduled: scheduled, precomputedRatings: pre) }
             // 常规赛打完后，季后赛进入“待确认首轮”状态，不自动开打。
             if let updated = league.ongoingSeason, updated.schedule.allSatisfy({ $0.playedGameId != nil }) {
                 var copy = updated; copy.playoffRound = 1; league.ongoingSeason = copy
@@ -514,9 +547,95 @@ final class LeagueStore: ObservableObject {
                 league.teams[ti].roster[si].player.honors.append(PlayerHonor(type: "总冠军", seasonNumber: ongoing.seasonNumber, teamName: cname, detail: "第 \(ongoing.seasonNumber) 赛季"))
             } }
         }
+        // 赛季结束：年龄 +1，真实模式按潜力和数据成长/下滑，37 岁以上场均 <5 分退役，开启自动交易时跑自动交易。
+        applySeasonEndChanges(&league, seasonNumber: ongoing.seasonNumber, seasonStats: regularPlayerStats, seed: ongoing.seed)
         league.ongoingSeason = nil
         league.nextSeasonNumber += 1
         league.updatedAt = Date()
+    }
+
+    // 赛季结束处理：年龄 +1；真实模式 23-30 岁上涨、35 岁起下滑；37 岁以上场均 <5 分退役。
+    private func applySeasonEndChanges(_ league: inout League, seasonNumber: Int, seasonStats: [PlayerSeasonStat], seed: Int64) {
+        let ppgMap = Dictionary(uniqueKeysWithValues: seasonStats.map { ($0.playerId, $0.pointsPerGame) })
+        let attributePaths: [WritableKeyPath<Attributes, Int>] = [\.threePoint, \.midRange, \.finishing, \.freeThrow, \.playmaking, \.rebounding, \.perimeterDefense, \.rimProtection, \.athleticism, \.basketballIQ]
+        for ti in league.teams.indices {
+            for si in league.teams[ti].roster.indices {
+                var player = league.teams[ti].roster[si].player
+                player.age += 1
+                let ppg = ppgMap[player.id] ?? 0
+                if league.settings.developmentMode == "真实" {
+                    if (23...30).contains(player.age) {
+                        var gain = player.attributes.potential >= 85 ? 2 : (player.attributes.potential >= 75 ? 1 : 0)
+                        if ppg >= 20 { gain += 1 }
+                        gain = min(gain, 3)
+                        if gain > 0 {
+                            // 涨最弱的 4 项（不含潜力），小幅上涨。
+                            let weakest = attributePaths.sorted { player.attributes[keyPath: $0] < player.attributes[keyPath: $1] }.prefix(4)
+                            for path in weakest { player.attributes[keyPath: path] = min(99, player.attributes[keyPath: path] + gain) }
+                            if let manual = player.overallOverride { player.overallOverride = min(99, manual + gain) }
+                        }
+                    } else if player.age >= 35 {
+                        var decline = 1
+                        if ppg < 10 { decline += 1 }
+                        if player.age >= 38 { decline += 1 }
+                        decline = min(decline, 3)
+                        let strongest = attributePaths.sorted { player.attributes[keyPath: $0] > player.attributes[keyPath: $1] }.prefix(4)
+                        for path in strongest { player.attributes[keyPath: path] = max(0, player.attributes[keyPath: path] - decline) }
+                        if let manual = player.overallOverride { player.overallOverride = max(0, manual - decline) }
+                    }
+                }
+                if player.age >= 37 && ppg < 5 {
+                    player.isRetired = true
+                    league.teams[ti].roster[si].status = .inactive
+                }
+                league.teams[ti].roster[si].player = player
+            }
+        }
+        if league.settings.autoTradeEnabled {
+            runAutoTrades(&league, seasonNumber: seasonNumber, seed: seed)
+        }
+    }
+
+    // 自动交易：赛季结束尝试换队，每队 5 个位置各至少 2 人、单队 95+ 不超过 2 人才成交，最多成交 4 笔。
+    private func runAutoTrades(_ league: inout League, seasonNumber: Int, seed: Int64) {
+        var rng = SeededRandom(seed: seed &+ Int64(seasonNumber) * 7919)
+        var done = 0
+        var attempts = 0
+        func positionOK(teams: [Team]) -> Bool {
+            for team in teams {
+                let active = team.roster.filter { $0.status.isActive && !$0.player.isRetired }
+                for pos in Position.allCases {
+                    if active.filter({ $0.player.position == pos }).count < 2 { return false }
+                }
+                if active.filter({ Rating.overall(for: $0.player) > 95 }).count > 2 { return false }
+            }
+            return true
+        }
+        while done < 4 && attempts < 8 {
+            attempts += 1
+            guard league.teams.count >= 2 else { break }
+            let a = rng.nextInt(in: 0...(league.teams.count - 1))
+            let b = rng.nextInt(in: 0...(league.teams.count - 1))
+            if a == b { continue }
+            let aSlots = league.teams[a].roster.indices.filter { league.teams[a].roster[$0].status.isActive && !league.teams[a].roster[$0].player.isRetired }
+            let bSlots = league.teams[b].roster.indices.filter { league.teams[b].roster[$0].status.isActive && !league.teams[b].roster[$0].player.isRetired }
+            guard !aSlots.isEmpty && !bSlots.isEmpty else { continue }
+            let ai = aSlots[rng.nextInt(in: 0...(aSlots.count - 1))]
+            let bi = bSlots[rng.nextInt(in: 0...(bSlots.count - 1))]
+            var trial = league.teams
+            let slotA = trial[a].roster[ai]
+            let slotB = trial[b].roster[bi]
+            trial[a].roster[ai] = slotB
+            trial[b].roster[bi] = slotA
+            if !positionOK(teams: [trial[a], trial[b]]) { continue }
+            let nameA = slotA.player.name
+            let nameB = slotB.player.name
+            let fromName = league.teams[a].name
+            let toName = league.teams[b].name
+            league.teams = trial
+            league.tradeHistory.append(TradeRecord(seasonNumber: seasonNumber, fromTeamName: fromName, toTeamName: toName, outPlayerNames: [nameA], inPlayerNames: [nameB], isAuto: true))
+            done += 1
+        }
     }
 
 }
