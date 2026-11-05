@@ -26,7 +26,7 @@ enum Position: String, Codable, CaseIterable, Identifiable {
 }
 
 // MARK: - 球员分项能力（12 项，全部 0-99）
-// 注意：潜力 potential 只影响未来（P2 成长），不计入当前总评。
+// 潜力 potential 不计入当前总评。
 // 投射不是单独一项：三分与中投的均值，在 Rating.swift 里算。
 struct Attributes: Codable, Equatable {
     enum CodingKeys: String, CodingKey { case threePoint, midRange, finishing, freeThrow, playmaking, rebounding, perimeterDefense, rimProtection, athleticism, basketballIQ, durability, potential }
@@ -87,33 +87,45 @@ struct PlayerHonor: Codable, Equatable, Identifiable {
     }
 }
 
+// MARK: - 球员出手倾向
+// 内线：内线出手占比高；外线：外线出手占比高；综合：正常比例。
+enum PlayerTendency: String, Codable, CaseIterable, Identifiable {
+    case inside = "内线"
+    case outside = "外线"
+    case balanced = "综合"
+    var id: String { rawValue }
+    var name: String { rawValue }
+}
+
 // MARK: - 球员
 // id 只在同一个存档内保证稳定：换存档后 id 不互通，跨存档不要拿 id 对人。
 struct Player: Codable, Identifiable, Equatable {
-    enum CodingKeys: String, CodingKey { case id, name, jerseyNumber, position, age, heightCm, weightKg, attributes, overallOverride, honors }
+    enum CodingKeys: String, CodingKey { case id, name, jerseyNumber, position, age, attributes, overallOverride, honors, tendency, isRetired }
     var id: UUID
     var name: String
-    var jerseyNumber: Int
+    // 球衣号用字符串存：“00”和“0”是两个不同的号。
+    var jerseyNumber: String
     var position: Position
     var age: Int
-    var heightCm: Int
-    var weightKg: Int
+    var tendency: PlayerTendency = .balanced
+    // 退役：年龄>=37 且单赛季场均<5 分时赛季结束自动退役，数据不清除，状态改 inactive，不可交易。
+    var isRetired: Bool = false
     var attributes: Attributes
     // 手动总评：nil = 按位置权重自动算；有值 = 用手动值（界面可开关）。
     var overallOverride: Int?
     // 个人荣誉：MVP、得分王、最佳阵容、总冠军、FMVP 等，赛季结束时记入，换队不丢（球员 ID 不变）。
     var honors: [PlayerHonor] = []
 
-    init(id: UUID = UUID(), name: String, jerseyNumber: Int, position: Position,
-         age: Int = 25, heightCm: Int = 195, weightKg: Int = 90,
-         attributes: Attributes = Attributes(), overallOverride: Int? = nil, honors: [PlayerHonor] = []) {
+    init(id: UUID = UUID(), name: String, jerseyNumber: String, position: Position,
+         age: Int = 25, attributes: Attributes = Attributes(), overallOverride: Int? = nil,
+         honors: [PlayerHonor] = [], tendency: PlayerTendency = .balanced, isRetired: Bool = false) {
         self.id = id
         self.name = name
         self.jerseyNumber = jerseyNumber
         self.position = position
         self.age = age
-        self.heightCm = heightCm
-        self.weightKg = weightKg
+        self.tendency = tendency
+        self.isRetired = isRetired
         self.attributes = attributes.clamped()
         self.overallOverride = overallOverride.map { min(99, max(0, $0)) }
         self.honors = honors
@@ -145,9 +157,9 @@ enum Conference: String, Codable, CaseIterable, Identifiable {
 }
 
 // MARK: - 球队
-// 固定 30 队：P0 不提供增删球队，只改球队资料与名单。
+// 固定 30 队：不提供增删球队，只改球队资料与名单。
 // 配色存十六进制字符串（如 "#E86018"），App 内颜色选择器可改；没有预置球队配色。
-// conference 是新增字段（默认未定）：老存档 JSON 里没有这个键时，
+// conference 默认未定：老存档 JSON 里没有这个键时，
 // 带默认值的 Codable 解码会用未定补上，不会把老存档读坏。
 struct Team: Codable, Identifiable, Equatable {
     enum CodingKeys: String, CodingKey { case id, name, abbreviation, division, conference, arena, colorHex, roster }
@@ -180,11 +192,14 @@ struct Team: Codable, Identifiable, Equatable {
 
 // MARK: - 联赛设置（每个存档独立一份）
 struct LeagueSettings: Codable, Equatable {
-    enum CodingKeys: String, CodingKey { case chemistry, coachRating, homeAdvantagePoints, randomVolatility, lastSeed }
-    // 球队评分公式里的两项，P0 默认 70，界面可调。
+    enum CodingKeys: String, CodingKey { case chemistry, coachRating, homeAdvantagePoints, randomVolatility, lastSeed, developmentMode, autoTradeEnabled }
+    // 球员成长模式：“永久”= 不改能力；“真实”= 23-30 岁按潜力和赛季数据小幅上涨，35 岁起每赛季下滑。
+    var developmentMode: String = "永久"
+    // 自动交易开关：开启后赛季结束有概率自动换队，仍可手动交易。
+    var autoTradeEnabled: Bool = false
+    // 球队评分公式里的两项，默认 70，界面可调。
     var chemistry: Int = 70
     var coachRating: Int = 70
-    // 模拟参数：主场加分、随机波动幅度。
     var homeAdvantagePoints: Int = 2
     var randomVolatility: Int = 12
     // 上次用的种子，方便下次直接重跑。
@@ -192,7 +207,7 @@ struct LeagueSettings: Codable, Equatable {
 }
 
 // MARK: - 单场球员数据（box score）
-// 投篮字段是新增（默认 0）：老快照的 box 里没有这些键时解码补 0，
+// 投篮字段默认 0：老快照的 box 里没有这些键时解码补 0，
 // 老比赛打开就是投篮 0 中 0，不会读坏；新比赛才有真实出手/命中。
 // 约束（引擎保证）：总命中 = 两分命中 + 三分命中；得分 = 两分命中*2 + 三分命中*3 + 罚球命中。
 struct PlayerGameStat: Codable, Equatable {
@@ -241,7 +256,7 @@ struct Game: Codable, Identifiable, Equatable {
 
 // MARK: - 球队赛季统计
 // 常规赛统计：季后赛胜负不计入这里，季后赛结果看 playoffSeries。
-// conference 是新增字段（默认空）：老快照里没有它时解码补空，历史页按分区照常看。
+// conference 默认空：老快照里没有它时解码补空，历史页按分区照常看。
 struct TeamSeasonStat: Codable, Identifiable, Equatable {
     enum CodingKeys: String, CodingKey { case teamId, teamName, division, conference, wins, losses, pointsFor, pointsAgainst }
     var id: UUID { teamId }
@@ -273,7 +288,7 @@ struct PlayerSeasonStat: Codable, Identifiable, Equatable {
     var totalSteals: Int
     var totalBlocks: Int
     var totalMinutes: Int
-    // 赛季投篮累计（新增，默认 0，老快照补 0）：只算常规赛，季后赛不并进来。
+    // 赛季投篮累计（默认 0，老快照补 0）：只算常规赛，季后赛不并进来。
     var totalFieldGoalsMade: Int = 0
     var totalFieldGoalsAttempted: Int = 0
     var totalThreeMade: Int = 0
@@ -373,7 +388,7 @@ struct OngoingSeason: Codable, Equatable, Identifiable {
 // 之后在球队/球员编辑器里怎么改，都不会改写已经跑完的赛季。
 // games 永远是常规赛（老快照的 29 场、新快照的 82 场/队）；季后赛单独放
 // playoffGames + playoffSeries，球员场均榜仍只算常规赛，季后赛看单场 box。
-// playoff* 与 champion* 都是新增字段（默认空）：老快照解码时补空，
+// playoff* 与 champion* 默认空：老快照解码时补空，
 // 老赛季打开就是“无季后赛”，不会读坏、不用迁移。
 struct SeasonSnapshot: Codable, Identifiable, Equatable {
     enum CodingKeys: String, CodingKey { case id, seasonNumber, seed, settings, games, teamStats, playerStats, playoffGames, playoffSeries, championTeamId, championTeamName, createdAt, awards, allNBAFirst, allNBASecond, allNBAThird, seasonLeaders, playoffPlayerStats }
@@ -397,10 +412,25 @@ struct SeasonSnapshot: Codable, Identifiable, Equatable {
     var createdAt: Date
 }
 
+// MARK: - 交易记录（手动和自动交易都记，自动交易必有记录）
+struct TradeRecord: Codable, Equatable, Identifiable {
+    var id: UUID
+    var seasonNumber: Int
+    var fromTeamName: String
+    var toTeamName: String
+    var outPlayerNames: [String]
+    var inPlayerNames: [String]
+    var isAuto: Bool
+    var createdAt: Date
+    init(id: UUID = UUID(), seasonNumber: Int, fromTeamName: String, toTeamName: String, outPlayerNames: [String], inPlayerNames: [String], isAuto: Bool, createdAt: Date = Date()) {
+        self.id = id; self.seasonNumber = seasonNumber; self.fromTeamName = fromTeamName; self.toTeamName = toTeamName; self.outPlayerNames = outPlayerNames; self.inPlayerNames = inPlayerNames; self.isAuto = isAuto; self.createdAt = createdAt
+    }
+}
+
 // MARK: - 联赛（一个存档 = 一个 League）
 // 存档文件只含这一个对象；存档之间除了名字没有任何共享数据。
 struct League: Codable, Identifiable, Equatable {
-    enum CodingKeys: String, CodingKey { case id, name, teams, settings, seasons, nextSeasonNumber, createdAt, updatedAt, ongoingSeason }
+    enum CodingKeys: String, CodingKey { case id, name, teams, settings, seasons, nextSeasonNumber, createdAt, updatedAt, ongoingSeason, tradeHistory }
     var id: UUID
     var name: String
     var teams: [Team]
@@ -408,6 +438,7 @@ struct League: Codable, Identifiable, Equatable {
     var seasons: [SeasonSnapshot]
     var nextSeasonNumber: Int
     var ongoingSeason: OngoingSeason? = nil
+    var tradeHistory: [TradeRecord] = []
     var createdAt: Date
     var updatedAt: Date
 
@@ -459,12 +490,9 @@ extension Color {
     }
 }
 
-// MARK: - 容错解码（修“进不去：data is missing”）
-// 根因：Swift 合成解码不会用属性默认值补缺失的键，旧存档里没有 5 版新增的
-// 投篮字段、季后赛字段、东西部字段时，解码直接抛 keyNotFound，界面就是“点了没反应”。
-// 现在每个结构都用 decodeIfPresent + 默认值，缺哪个键补哪个，旧存档照常打开；
-// 新存档保存时仍会把全部字段写全，不影响新数据。
-// 注意：这些 init 都写在 extension 里，不会顶掉原有的成员初始化器。
+// MARK: - 容错解码
+// 每个结构都用 decodeIfPresent + 默认值，缺哪个键补哪个，旧存档照常打开；
+// 这些 init 都写在 extension 里，不会顶掉原有的成员初始化器。
 extension Attributes {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -488,15 +516,25 @@ extension Player {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
-        jerseyNumber = try c.decodeIfPresent(Int.self, forKey: .jerseyNumber) ?? 0
+        if let raw = try c.decodeIfPresent(String.self, forKey: .jerseyNumber) {
+            jerseyNumber = raw
+        } else if let num = try c.decodeIfPresent(Int.self, forKey: .jerseyNumber) {
+            jerseyNumber = "\(num)"
+        } else {
+            jerseyNumber = "0"
+        }
         if let raw = try c.decodeIfPresent(String.self, forKey: .position), let pos = Position(rawValue: raw) {
             position = pos
         } else {
             position = .pg
         }
         age = try c.decodeIfPresent(Int.self, forKey: .age) ?? 25
-        heightCm = try c.decodeIfPresent(Int.self, forKey: .heightCm) ?? 195
-        weightKg = try c.decodeIfPresent(Int.self, forKey: .weightKg) ?? 90
+        if let raw = try c.decodeIfPresent(String.self, forKey: .tendency), let ten = PlayerTendency(rawValue: raw) {
+            tendency = ten
+        } else {
+            tendency = .balanced
+        }
+        isRetired = try c.decodeIfPresent(Bool.self, forKey: .isRetired) ?? false
         attributes = try c.decodeIfPresent(Attributes.self, forKey: .attributes) ?? Attributes()
         overallOverride = try c.decodeIfPresent(Int.self, forKey: .overallOverride)
         honors = try c.decodeIfPresent([PlayerHonor].self, forKey: .honors) ?? []
@@ -542,6 +580,8 @@ extension LeagueSettings {
         homeAdvantagePoints = try c.decodeIfPresent(Int.self, forKey: .homeAdvantagePoints) ?? 2
         randomVolatility = try c.decodeIfPresent(Int.self, forKey: .randomVolatility) ?? 12
         lastSeed = try c.decodeIfPresent(Int64.self, forKey: .lastSeed) ?? 1
+        developmentMode = try c.decodeIfPresent(String.self, forKey: .developmentMode) ?? "永久"
+        autoTradeEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoTradeEnabled) ?? false
     }
 }
 
@@ -655,6 +695,7 @@ extension League {
         seasons = try c.decodeIfPresent([SeasonSnapshot].self, forKey: .seasons) ?? []
         nextSeasonNumber = try c.decodeIfPresent(Int.self, forKey: .nextSeasonNumber) ?? 1
         ongoingSeason = try c.decodeIfPresent(OngoingSeason.self, forKey: .ongoingSeason)
+        tradeHistory = try c.decodeIfPresent([TradeRecord].self, forKey: .tradeHistory) ?? []
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
     }
