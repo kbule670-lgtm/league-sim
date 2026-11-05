@@ -19,7 +19,7 @@ struct TeamsView: View {
         return groups.map { TeamGroup(key: $0.key, teams: $0.value) }.sorted { $0.key < $1.key }
     }
 
-    // 再拆一层：body 本身只拼三块，每块单独算类型，编译器不再对整页一个大表达式算账。
+    // body 只拼三块，每块单独算类型。
     private var tradeSection: some View {
         Section("中途交易（手动）") {
             NavigationLink {
@@ -52,7 +52,7 @@ struct TeamsView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                QuizStyleHeader(title: "球队", onExit: { store.backToArchiveList() })
+                QuizStyleHeader(title: "球队")
                 List {
                 Section {
                     Button("全部填测试名单") { store.fillTestRostersForAllEmptyTeams() }
@@ -68,20 +68,12 @@ struct TeamsView: View {
 }
 
 
-// 刷题页式顶栏：黑底、左上角圆形返回箭头、标题居中，系统导航栏隐藏。
-// 点左上角箭头 = 保存当前存档并回到存档列表（不是只回上一页）。
+// 黑底顶栏：标题居中，系统导航栏隐藏；一键退出存档已取消，想回存档列表去“存档”页点“保存并回到存档列表”。
 struct QuizStyleHeader: View {
     var title: String
-    var onExit: () -> Void
     var body: some View {
         HStack {
-            Button(action: onExit) {
-                ZStack {
-                    Circle().fill(Color.white.opacity(0.15)).frame(width: 44, height: 44)
-                    Image(systemName: "chevron.left").foregroundStyle(.white).font(.system(size: 20, weight: .semibold))
-                }
-            }
-            .accessibilityLabel("退出存档")
+            Color.clear.frame(width: 44, height: 44)
             Spacer()
             Text(title).font(.headline).foregroundStyle(.white)
             Spacer()
@@ -93,8 +85,7 @@ struct QuizStyleHeader: View {
     }
 }
 
-// 球队行标签（从 TeamsView.body 里拆出来）：编译器对原来整页一个大表达式算不过来，
-// 拆成独立小视图后每段类型检查都变小，样子和逻辑原样不动。
+// 球队行标签：从 body 里拆出来的独立小视图。
 private struct TeamRowLabel: View {
     var team: Team
     var body: some View {
@@ -118,7 +109,6 @@ private struct TeamRowLabel: View {
     }
 }
 
-// 一个分区的球队段（同样是拆分用）：段内每队一行，点进球队详情。
 private struct TeamGroupSection: View {
     var group: TeamsView.TeamGroup
     var body: some View {
@@ -134,22 +124,6 @@ private struct TeamGroupSection: View {
     }
 }
 
-// 左上角圆形退出按钮（黑圆白箭头）：点一下保存当前存档并回到存档列表。
-private struct ExitArchiveButton: View {
-    @EnvironmentObject private var store: LeagueStore
-    var body: some View {
-        Button(action: { store.backToArchiveList() }) {
-            ZStack {
-                Circle().fill(Color.black.opacity(0.8)).frame(width: 36, height: 36)
-                Image(systemName: "chevron.left").foregroundStyle(.white).font(.system(size: 17, weight: .semibold))
-            }
-        }
-        .accessibilityLabel("退出存档")
-    }
-}
-
-// 球队详情：队名/缩写/分区/主场/配色可改；名单分首发、替补、inactive 三段；
-// 每名球员可上移/下移轮换顺序、改状态、删人；校验提醒列在顶部。
 struct TeamDetailView: View {
     var teamId: UUID
     @EnvironmentObject private var store: LeagueStore
@@ -220,7 +194,6 @@ struct TeamDetailView: View {
     }
 }
 
-// 球队资料编辑字段：改完即保存到当前存档。
 private struct TeamEditorFields: View {
     var team: Team
     @EnvironmentObject private var store: LeagueStore
@@ -264,7 +237,6 @@ private struct TeamEditorFields: View {
     }
 }
 
-// 名单行：显示总评（自动或手动）、位置、球衣号；可改状态、调轮换顺序、删人、点进编辑器。
 private struct PlayerRow: View {
     var teamId: UUID
     var slot: RosterSlot
