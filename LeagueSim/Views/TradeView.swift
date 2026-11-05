@@ -27,9 +27,10 @@ struct TradeView: View {
                     if let source = sourceTeam {
                         ForEach(source.roster.sorted { $0.rotationOrder < $1.rotationOrder }) { slot in
                             Button {
+                                if slot.player.isRetired { return }
                                 if outIds.contains(slot.player.id) { outIds.remove(slot.player.id) } else { outIds.insert(slot.player.id) }
                             } label: {
-                                HStack { Text((outIds.contains(slot.player.id) ? "✓ " : "") + "\(slot.player.name) · #\(slot.player.jerseyNumber) · \(slot.player.position.name)"); Spacer() }
+                                HStack { Text((outIds.contains(slot.player.id) ? "✓ " : "") + "\(slot.player.name) · #\(slot.player.jerseyNumber) · \(slot.player.position.name) · 总评 \(Rating.overall(for: slot.player))" + (slot.player.isRetired ? " · 已退役" : "")); Spacer() }
                             }.buttonStyle(.plain)
                         }
                     }
@@ -43,9 +44,10 @@ struct TradeView: View {
                     if let dest = destinationTeam {
                         ForEach(dest.roster.sorted { $0.rotationOrder < $1.rotationOrder }) { slot in
                             Button {
+                                if slot.player.isRetired { return }
                                 if inIds.contains(slot.player.id) { inIds.remove(slot.player.id) } else { inIds.insert(slot.player.id) }
                             } label: {
-                                HStack { Text((inIds.contains(slot.player.id) ? "✓ " : "") + "\(slot.player.name) · #\(slot.player.jerseyNumber) · \(slot.player.position.name)"); Spacer() }
+                                HStack { Text((inIds.contains(slot.player.id) ? "✓ " : "") + "\(slot.player.name) · #\(slot.player.jerseyNumber) · \(slot.player.position.name) · 总评 \(Rating.overall(for: slot.player))" + (slot.player.isRetired ? " · 已退役" : "")); Spacer() }
                             }.buttonStyle(.plain)
                         }
                     }
@@ -57,7 +59,7 @@ struct TradeView: View {
                             resultMessage = "交易成功：已换队，下一赛季记在新队下，已跑完的赛季快照不变。"
                             outIds = []; inIds = []
                         } else {
-                            resultMessage = "交易失败：换完后同队内球衣号重复，或选的人不在队里，先改球衣号再试。"
+                            resultMessage = "交易失败：换完后同队内球衣号重复、选的人不在队里，或选了已退役球员，先改球衣号再试。"
                         }
                     }
                     .disabled(sourceTeamId == nil || destinationTeamId == nil || sourceTeamId == destinationTeamId || outIds.isEmpty)

@@ -1,6 +1,6 @@
 import SwiftUI
 
-// 球员能力编辑器：基本信息 + 位置 + 12 项分项（0-99 滑杆）。
+// 球员能力编辑器：基本信息 + 位置 + 12 项分项（0-99 键盘输入）。
 // 总评实时显示：默认按位置权重自动算；打开“手动总评”后用手动值，潜力始终不计入。
 struct PlayerEditorView: View {
     var teamId: UUID
@@ -12,8 +12,7 @@ struct PlayerEditorView: View {
     @State private var jerseyText = ""
     @State private var position: Position = .pg
     @State private var ageText = "25"
-    @State private var heightText = "195"
-    @State private var weightText = "90"
+    @State private var tendency: PlayerTendency = .balanced
     @State private var status: RosterStatus = .bench
     @State private var attrs = Attributes()
     @State private var useManualOverall = false
@@ -21,18 +20,17 @@ struct PlayerEditorView: View {
 
     private var previewPlayer: Player {
         Player(name: name.isEmpty ? "未命名" : name,
-               jerseyNumber: Int(jerseyText) ?? 0, position: position,
-               age: Int(ageText) ?? 25, heightCm: Int(heightText) ?? 195,
-               weightKg: Int(weightText) ?? 90, attributes: attrs,
-               overallOverride: useManualOverall ? manualOverall : nil)
+               jerseyNumber: jerseyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "0" : jerseyText.trimmingCharacters(in: .whitespacesAndNewlines), position: position,
+               age: Int(ageText) ?? 25, attributes: attrs,
+               overallOverride: useManualOverall ? manualOverall : nil, tendency: tendency)
     }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("基本信息") {
-                    // 标签必须写死在左边：原来只靠 TextField 的占位标签，
-                    // 填上数字后标签就没了，25/195/90 是啥根本看不出来。
+                    // 标签写死在左边，不只靠占位标签：
+                    // 填上数字后占位标签会消失。
                     HStack {
                         Text("姓名")
                         TextField("", text: $name)
@@ -55,18 +53,13 @@ struct PlayerEditorView: View {
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.trailing)
                     }
-                    HStack {
-                        Text("身高（厘米）")
-                        TextField("", text: $heightText)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.trailing)
+                    Picker("出手倾向", selection: $tendency) {
+                        ForEach(PlayerTendency.allCases) { item in
+                            Text(item.name).tag(item)
+                        }
                     }
-                    HStack {
-                        Text("体重（公斤）")
-                        TextField("", text: $weightText)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.trailing)
-                    }
+                    Text("内线：内线出手占比高；外线：外线出手占比高；综合：正常比例。")
+                        .font(.footnote).foregroundStyle(.secondary)
                     Picker("名单状态", selection: $status) {
                         ForEach(RosterStatus.allCases) { item in
                             Text(item.rawValue).tag(item)
@@ -142,9 +135,8 @@ struct PlayerEditorView: View {
         jerseyText = "\(player.jerseyNumber)"
         position = player.position
         ageText = "\(player.age)"
-        heightText = "\(player.heightCm)"
-        weightText = "\(player.weightKg)"
         status = slot.status
+        tendency = player.tendency
         attrs = player.attributes
         if let manual = player.overallOverride {
             useManualOverall = true
@@ -153,14 +145,14 @@ struct PlayerEditorView: View {
     }
 
     private func save() {
-        // 15 版修编辑丢荣誉：新建 Player 时把原荣誉带上，否则改一次能力/球衣就把前几赛季荣誉全清空。
+        // 编辑保存时把原荣誉带上，否则改一次能力/球衣就把前几赛季荣誉全清空。
         let player = Player(id: slot?.player.id ?? UUID(),
                             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-                            jerseyNumber: Int(jerseyText) ?? 0, position: position,
-                            age: Int(ageText) ?? 25, heightCm: Int(heightText) ?? 195,
-                            weightKg: Int(weightText) ?? 90, attributes: attrs.clamped(),
+                            jerseyNumber: jerseyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "0" : jerseyText.trimmingCharacters(in: .whitespacesAndNewlines), position: position,
+                            age: Int(ageText) ?? 25, attributes: attrs.clamped(),
                             overallOverride: useManualOverall ? manualOverall : nil,
-                            honors: slot?.player.honors ?? [])
+                            honors: slot?.player.honors ?? [], tendency: tendency,
+                            isRetired: slot?.player.isRetired ?? false)
         if let slot {
             store.updatePlayer(in: teamId, slot: RosterSlot(player: player, status: status,
                                                              rotationOrder: slot.rotationOrder))
@@ -170,7 +162,6 @@ struct PlayerEditorView: View {
     }
 }
 
-// 0-99 键盘输入，不用滑块：用户反馈拖滑块改数太费劲，直接敲数字。
 // 文本框用本地 text 状态 + 焦点守门：正在输入时不把 value 写回 text，
 // 这样清空重输不会被立刻弹回 0；失焦后才按 value 同步一次，输入始终钳制 0-99。
 private struct AttributeSlider: View {

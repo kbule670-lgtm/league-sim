@@ -1,26 +1,7 @@
 import SwiftUI
 
-// 虚拟播报页：点进一场比赛，比分从 0:0 一步步播到终场。
-// 快速跳过也在这个页里：点“快速跳过”直接跳到终场分，不用等播完。
-// 内存：events 只在播放器里，退出页面不写存档。
-//
-// 11 版（按 GPT 方案收口，10 版的思路 + 补上 GPT 强调的两点）：
-// 1. 单一播放器、单一任务：events、shownCount、isPlaying、speed 全在 BroadcastPlayer
-//    里，页面只观察、不自己维护进度；不用 Timer，不用 .task(id:) 反复重建任务。
-// 2. 播放器实例唯一：按比赛 id 静态缓存，同一场比赛永远复用同一个播放器，
-//    页面重建、导航栈刷新、重新进页都不能重新创建进度。
-// 3. 任务代次校验（10 版缺的）：play/pause/replay/skip 都会让 taskGeneration +1，
-//    任务循环每步都校验 generation == taskGeneration、!Task.isCancelled、isPlaying，
-//    三项缺一就立刻退出，旧任务失效后绝对不能再改 shownCount。
-// 4. 暂停：isPlaying = false、代次 +1、取消任务，保留 shownCount 和 events，
-//    UI 立即变“播放”并显示“已暂停”。
-// 5. 继续：从当前 shownCount 继续，不重新生成事件、不清零；启动前如果已在播就不重起任务。
-// 6. 重播：只有主动点“重播”才清零；其他任何操作都不能把 shownCount 设为 0。
-// 7. 倍速：只改 speed，任务下一次循环按 0.5 / speed 算间隔，不销毁播放器、不重建事件、不重置进度。
-// 8. 生命周期：onAppear 只获取已有播放器、只在第一次自动播；onDisappear 不清零、不强制暂停，
-//    离开再进入保留原来的播放状态（要停只能点暂停）。
-// 9. 诊断：页面底部有一行小字诊断（播放器 id 后 4 位、已播步数/总数、播放状态、任务代次），
-//    再出问题截图这一行就能判断是播放器被重建、还是旧任务在改进度；同时打 print 日志。
+// 虚拟播报页：点进一场比赛，比分从 0:0 一步步播到终场；点“快速跳过”直接跳到终场分。
+// 播放器按比赛 id 缓存、只改状态不重建进度，退出页面不写存档；页面底部有一行诊断（播放器 id、已播步数、状态、代次）。
 @MainActor
 final class BroadcastPlayer: ObservableObject {
     private static var cache: [UUID: BroadcastPlayer] = [:]
@@ -156,6 +137,15 @@ struct BroadcastView: View {
     }
 
     @State private var showingReplayConfirm = false
+    @State private var foldFullRecord = false
+    @State private var foldLiveStats = true
+
+    // 实时得分：已播事件里该球员得了多少分（按名字 + 主客队对）。
+    private func livePoints(for stat: PlayerGameStat) -> Int {
+        player.events.prefix(player.shownCount).filter {
+            $0.scorerName == stat.playerName && $0.isHomeScoring == (stat.teamId == game.homeTeamId)
+        }.map { $0.points }.reduce(0, +)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -207,6 +197,21 @@ struct BroadcastView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
+                    Button { foldLiveStats.toggle() } label: {
+                        HStack { Text("实时球员数据（上场情况 + 得分）"); Spacer(); Image(systemName: foldLiveStats ? "chevron.down" : "chevron.right") }
+                    }
+                    if foldLiveStats {
+                        Text("上场情况看出场分钟：分钟 > 0 就是上过场；实时得分随播报进度涨，全场数据是这场的最终数据。")
+                            .font(.caption).foregroundStyle(.secondary)
+                        ForEach([game.homeTeamId, game.awayTeamId], id: \.self) { teamId in
+                            Text(teamId == game.homeTeamId ? game.homeTeamName : game.awayTeamName).font(.headline)
+                            ForEach(game.boxScore.filter { $0.teamId == teamId }, id: \.playerId) { stat in
+                                Text("\(stat.playerName)：实时 \(livePoints(for: stat)) 分 · 全场 \(stat.points) 分 \(stat.rebounds) 板 \(stat.assists) 助 · 出场 \(stat.minutes) 分钟")
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                    Divider()
                     Text("最近得分").font(.headline)
                     if player.shownCount == 0 {
                         Text("点播放，从 0:0 开始播。").foregroundStyle(.secondary)
@@ -219,6 +224,25 @@ struct BroadcastView: View {
                             } else {
                                 Text("\(event.timeText) · \(event.scorerName) +\(event.points)（\(event.isHomeScoring ? game.homeTeamName : game.awayTeamName)）· \(event.homeScore) : \(event.awayScore)")
                                     .font(.caption)
+                            }
+                        }
+                    }
+                    Divider()
+                    Button { foldFullRecord.toggle() } label: {
+                        HStack { Text("全场得分记录（\(player.shownCount)/\(player.events.count) 条）"); Spacer(); Image(systemName: foldFullRecord ? "chevron.down" : "chevron.right") }
+                    }
+                    if foldFullRecord {
+                        if player.shownCount == 0 {
+                            Text("还没开始播。").foregroundStyle(.secondary)
+                        } else {
+                            ForEach(Array(player.events.prefix(player.shownCount))) { event in
+                                if event.scorerName.isEmpty {
+                                    Text("\(event.timeText) · \(event.isHomeScoring ? game.homeTeamName : game.awayTeamName) +\(event.points) · \(event.homeScore) : \(event.awayScore)")
+                                        .font(.caption)
+                                } else {
+                                    Text("\(event.timeText) · \(event.scorerName) +\(event.points)（\(event.isHomeScoring ? game.homeTeamName : game.awayTeamName)）· \(event.homeScore) : \(event.awayScore)")
+                                        .font(.caption)
+                                }
                             }
                         }
                     }

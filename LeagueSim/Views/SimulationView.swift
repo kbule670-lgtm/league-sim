@@ -14,6 +14,8 @@ struct SimulationView: View {
     @State private var autoPlaying = false
     @State private var selectedScheduledId: UUID?
     @State private var showingGameAction = false
+    @State private var broadcastGame: Game?
+    @State private var showingBroadcast = false
     @State private var showingDiscard = false
     @State private var showingStartError = false
     @State private var leaderCategory = "得分"
@@ -28,7 +30,7 @@ struct SimulationView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                QuizStyleHeader(title: "模拟", onExit: { store.backToArchiveList() })
+                QuizStyleHeader(title: "模拟")
                 Form {
                 if let league {
                     Section("本赛季设置（存在当前存档里）") {
@@ -36,6 +38,19 @@ struct SimulationView: View {
                         Stepper("教练评分：\(league.settings.coachRating)", value: bindingSettings(\.coachRating), in: 0...99)
                         Stepper("主场加分：\(league.settings.homeAdvantagePoints)", value: bindingSettings(\.homeAdvantagePoints), in: 0...10)
                         Stepper("随机波动：\(league.settings.randomVolatility)", value: bindingSettings(\.randomVolatility), in: 0...30)
+                        Picker("球员成长", selection: Binding(
+                            get: { league.settings.developmentMode },
+                            set: { newValue in store.updateCurrent { l in l.settings.developmentMode = newValue } }
+                        )) {
+                            Text("永久（不改能力）").tag("永久")
+                            Text("真实（23-30 岁按潜力与数据上涨，35 岁起下滑）").tag("真实")
+                        }
+                        Toggle("自动交易", isOn: Binding(
+                            get: { league.settings.autoTradeEnabled },
+                            set: { newValue in store.updateCurrent { l in l.settings.autoTradeEnabled = newValue } }
+                        ))
+                        Text("自动交易开启后，赛季结束有概率自动换队（每队 5 个位置各至少 2 人、单队 95+ 不超过 2 人才成交），交易记录在“历史”里看；期间仍可手动交易。")
+                            .font(.footnote).foregroundStyle(.secondary)
                         TextField("随机种子（整数）", text: $seedText).keyboardType(.numbersAndPunctuation)
                         Text("同一名单 + 同一种子 + 同一打法顺序 = 同一结果；中途改名单、改种子，后面的比赛就变。")
                             .font(.footnote).foregroundStyle(.secondary)
@@ -73,9 +88,19 @@ struct SimulationView: View {
             } message: { Text("对战表和已打的比赛都会丢掉，已跑完的赛季快照不受影响。") }
             .alert("这场怎么打", isPresented: $showingGameAction) {
                 Button("模拟到该场") { if let id = selectedScheduledId { store.simulateRegularGamesUpTo(scheduledId: id) } }
-                Button("只模拟该场") { if let id = selectedScheduledId { store.simulateRegularGame(scheduledId: id) } }
+                Button("直接模拟该场") { if let id = selectedScheduledId { store.simulateRegularGame(scheduledId: id) } }
+                Button("虚拟播报该场") {
+                    if let id = selectedScheduledId, let game = store.simulateRegularGameReturning(scheduledId: id) {
+                        broadcastGame = game; showingBroadcast = true
+                    }
+                }
                 Button("取消", role: .cancel) {}
-            } message: { Text("“模拟到该场”是把这场之前的未打场次连这场一起打完；“只模拟该场”是只打这一场，之前的场次留着以后打，排名按已打场次算。") }
+            } message: { Text("“模拟到该场”是把这场之前的未打场次连这场一起打完；“直接模拟该场”是只打这一场，立刻出结果；“虚拟播报该场”是先模拟出结果，再按播报一步步播给你看。") }
+            .sheet(isPresented: $showingBroadcast) {
+                if let game = broadcastGame, let league {
+                    BroadcastView(game: game, seasonSeed: league.ongoingSeason?.seed ?? league.settings.lastSeed)
+                }
+            }
             }
             .navigationBarHidden(true)
         }
@@ -204,8 +229,8 @@ struct SimulationView: View {
         case "助攻": return stats.sorted { $0.assistsPerGame > $1.assistsPerGame }
         case "抢断": return stats.sorted { $0.stealsPerGame > $1.stealsPerGame }
         case "盖帽": return stats.sorted { $0.blocksPerGame > $1.blocksPerGame }
-        case "投篮命中率": return stats.filter { $0.totalFieldGoalsAttempted >= 10 }.sorted { $0.fieldGoalPercentage > $1.fieldGoalPercentage }
-        case "三分命中率": return stats.filter { $0.totalThreeAttempted >= 10 }.sorted { $0.threePercentage > $1.threePercentage }
+        case "投篮命中率": return stats.filter { $0.games > 0 && Double($0.totalFieldGoalsAttempted) / Double($0.games) >= 4 }.sorted { $0.fieldGoalPercentage > $1.fieldGoalPercentage }
+        case "三分命中率": return stats.filter { $0.games > 0 && Double($0.totalFieldGoalsAttempted) / Double($0.games) >= 4 }.sorted { $0.threePercentage > $1.threePercentage }
         case "罚球命中率": return stats.filter { $0.totalFreeThrowsAttempted >= 10 }.sorted { $0.freeThrowPercentage > $1.freeThrowPercentage }
         default: return stats
         }
@@ -247,6 +272,8 @@ struct HistoryView: View {
     @State private var foldDivisions = false
     @State private var foldSeasonAwardsOverview = true
     @State private var foldHistoryLeaderboard = false
+    @State private var foldTopScoring = false
+    @State private var foldTradeHistory = false
     @State private var historyLeaderCategory = "得分"
 
     private var seasons: [SeasonSnapshot] {
@@ -280,8 +307,8 @@ struct HistoryView: View {
         case "助攻": return stats.filter { $0.games >= 82 }.sorted { $0.assistsPerGame > $1.assistsPerGame }
         case "抢断": return stats.filter { $0.games >= 82 }.sorted { $0.stealsPerGame > $1.stealsPerGame }
         case "盖帽": return stats.filter { $0.games >= 82 }.sorted { $0.blocksPerGame > $1.blocksPerGame }
-        case "投篮": return stats.filter { $0.totalFieldGoalsAttempted >= 300 }.sorted { $0.fieldGoalPercentage > $1.fieldGoalPercentage }
-        case "三分": return stats.filter { $0.totalThreeAttempted >= 300 }.sorted { $0.threePercentage > $1.threePercentage }
+        case "投篮": return stats.filter { $0.games > 0 && Double($0.totalFieldGoalsAttempted) / Double($0.games) >= 4 }.sorted { $0.fieldGoalPercentage > $1.fieldGoalPercentage }
+        case "三分": return stats.filter { $0.games > 0 && Double($0.totalFieldGoalsAttempted) / Double($0.games) >= 4 }.sorted { $0.threePercentage > $1.threePercentage }
         case "罚球": return stats.filter { $0.totalFreeThrowsAttempted >= 300 }.sorted { $0.freeThrowPercentage > $1.freeThrowPercentage }
         default: return []
         }
@@ -302,10 +329,25 @@ struct HistoryView: View {
         }
     }
 
+    // 三分王：只统计场均三分出手 >= 3 次的球员，按三分总个数排。
+    private func threePointKing(for season: SeasonSnapshot) -> PlayerSeasonStat? {
+        season.playerStats.filter { $0.games > 0 && Double($0.totalThreeAttempted) / Double($0.games) >= 3 }
+            .max(by: { $0.totalThreeMade < $1.totalThreeMade })
+    }
+
+    // 三双王 / 两双王：按该赛季常规赛三双 / 两双次数排。
+    private func milestoneKing(for season: SeasonSnapshot, triple: Bool) -> (name: String, team: String, count: Int)? {
+        let counts = SimulationEngine.milestoneCounts(in: season.games)
+        let best = counts.max(by: { (triple ? $0.value.triple : $0.value.double) < (triple ? $1.value.triple : $1.value.double) })
+        guard let best, (triple ? best.value.triple : best.value.double) > 0 else { return nil }
+        let stat = season.playerStats.first { $0.playerId == best.key }
+        return (stat?.playerName ?? "", stat?.teamName ?? "", triple ? best.value.triple : best.value.double)
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                QuizStyleHeader(title: "历史快照", onExit: { store.backToArchiveList() })
+                QuizStyleHeader(title: "历史快照")
                 List {
                 if seasons.isEmpty {
                     Section {
@@ -323,7 +365,7 @@ struct HistoryView: View {
                             }
                         }
                     }
-                    // 15 版新增：历年奖项一览 + 历史数据榜前 30，不用一个赛季一个赛季翻。
+                    // 历年奖项一览 + 历史数据榜前 30。
                     Section {
                         Button { foldSeasonAwardsOverview.toggle() } label: {
                             HStack { Text("历年奖项一览（每个赛季 MVP、得分王等）"); Spacer(); Image(systemName: foldSeasonAwardsOverview ? "chevron.down" : "chevron.right") }
@@ -369,7 +411,37 @@ struct HistoryView: View {
                                     Text(historyLeaderValueText(stat: stat, category: historyLeaderCategory)).font(.caption).foregroundStyle(.secondary)
                                 }
                             }
-                            Text("得分榜按场均排（累计出场至少 82 场），总得分榜按累计总分排（不设出场门槛）；命中率榜按命中率排（累计出手至少 300 次），老快照投篮为 0 的不进命中率榜。").font(.caption).foregroundStyle(.secondary)
+                            Text("得分榜按场均排（累计出场至少 82 场），总得分榜按累计总分排（不设出场门槛）；命中率榜只统计场均出手 >= 4 次的球员，老快照投篮为 0 的不进命中率榜。").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Section {
+                        Button { foldTopScoring.toggle() } label: {
+                            HStack { Text("历史单场得分最高前 10"); Spacer(); Image(systemName: foldTopScoring ? "chevron.down" : "chevron.right") }
+                        }
+                        if foldTopScoring {
+                            let top = SimulationEngine.topScoringGames(in: seasons, limit: 10)
+                            if top.isEmpty {
+                                Text("还没有比赛数据。").font(.caption).foregroundStyle(.secondary)
+                            }
+                            ForEach(Array(top.enumerated()), id: \.offset) { index, row in
+                                Text("\(index + 1). \(row.playerName)（\(row.teamName)）\(row.points) 分 · 第 \(row.seasonNumber) 赛季 vs \(row.opponent)")
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                    Section {
+                        Button { foldTradeHistory.toggle() } label: {
+                            HStack { Text("交易记录"); Spacer(); Image(systemName: foldTradeHistory ? "chevron.down" : "chevron.right") }
+                        }
+                        if foldTradeHistory {
+                            let records = (store.currentLeague?.tradeHistory ?? []).sorted { $0.createdAt > $1.createdAt }
+                            if records.isEmpty {
+                                Text("还没有交易记录：手动交易和自动交易都会记在这里。").font(.caption).foregroundStyle(.secondary)
+                            }
+                            ForEach(records) { record in
+                                Text("第 \(record.seasonNumber) 赛季 · \(record.isAuto ? "自动" : "手动")：\(record.fromTeamName) \(record.outPlayerNames.joined(separator: "、")) ⇄ \(record.toTeamName) \(record.inPlayerNames.joined(separator: "、"))")
+                                    .font(.caption)
+                            }
                         }
                     }
                     if let season = selected {
@@ -453,6 +525,16 @@ struct HistoryView: View {
                                 ForEach(season.seasonLeaders, id: \.category) { leader in
                                     Text("\(leader.category)：\(leader.playerName)（\(leader.teamName)） \(leader.valueText)")
                                         .font(.caption)
+                                }
+                                if let king = threePointKing(for: season) {
+                                    Text(String(format: "三分王：%@（%@）三分 %d 个 · 场均 %.1f 个 · 命中率 %.1f%%", king.playerName, king.teamName, king.totalThreeMade, king.games > 0 ? Double(king.totalThreeMade) / Double(king.games) : 0, king.threePercentage * 100))
+                                        .font(.caption)
+                                }
+                                if let king = milestoneKing(for: season, triple: true) {
+                                    Text("三双王：\(king.name)（\(king.team)）\(king.count) 次").font(.caption)
+                                }
+                                if let king = milestoneKing(for: season, triple: false) {
+                                    Text("两双王：\(king.name)（\(king.team)）\(king.count) 次").font(.caption)
                                 }
                                 if season.awards.isEmpty && season.seasonLeaders.isEmpty {
                                     Text("老快照没有奖项数据，新赛季结算后这里才有。").font(.caption).foregroundStyle(.secondary)
@@ -549,8 +631,7 @@ struct HistoryView: View {
 }
 
 // 季后赛系列赛详情：点进一轮，先看这轮的各场比赛比分，再点进单场看 box 与播报。
-// 以前系列赛那行只是纯文字点不动，各场比赛又混在 105 场的长列表里难找，
-// 现在按系列赛分组，gameIds 的顺序就是比赛顺序。
+// 按系列赛分组，gameIds 的顺序就是比赛顺序。
 private struct PlayoffSeriesDetailView: View {
     var series: PlayoffSeries
     var season: SeasonSnapshot

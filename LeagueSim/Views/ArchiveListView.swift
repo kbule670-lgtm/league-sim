@@ -55,8 +55,7 @@ struct ArchiveListView: View {
                                     .clipShape(Capsule())
                             }
                         }
-                        // 修复“点了没反应”：不用 List 里的 Button（在部分系统上整行点按会丢），
-                        // 直接整行可点，点哪里都进；重复点按在 store 里已忽略。
+                        // 整行可点，不用 List 里的 Button（在部分系统上整行点按会丢）。
                         .contentShape(Rectangle())
                         .onTapGesture { store.enterArchive(id: meta.id) }
                         .swipeActions {
@@ -139,11 +138,12 @@ struct ArchiveSettingsView: View {
     @State private var showingRename = false
     @State private var renameText = ""
     @State private var showingDelete = false
+    @State private var showingClearHistory = false
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                QuizStyleHeader(title: "存档", onExit: { store.backToArchiveList() })
+                QuizStyleHeader(title: "存档")
                 List {
                 if let league = store.currentLeague {
                     Section("当前存档") {
@@ -166,6 +166,13 @@ struct ArchiveSettingsView: View {
                             showingDelete = true
                         }
                     }
+                    Section("清除历史数据") {
+                        Button("清除历史赛季数据", role: .destructive) {
+                            showingClearHistory = true
+                        }
+                        Text("只清除赛季快照、进行中的赛季和交易记录；球员名单和球队资料保留，之后可以重新跑赛季。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                     Section("离线说明") {
                         Text("本 App 不登录、不联网、不调用任何网络接口。飞行模式下建档、编辑、模拟、看快照全部可用。")
                             .font(.footnote)
@@ -178,6 +185,12 @@ struct ArchiveSettingsView: View {
                 TextField("新名字", text: $renameText)
                 Button("取消", role: .cancel) {}
                 Button("保存") { store.renameCurrentLeague(to: renameText) }
+            }
+            .alert("清除历史赛季数据？", isPresented: $showingClearHistory) {
+                Button("取消", role: .cancel) {}
+                Button("清除", role: .destructive) { store.clearHistory() }
+            } message: {
+                Text("赛季快照、进行中的赛季和交易记录会全部清除，不可恢复；球员名单和球队资料保留。")
             }
             .alert("删除当前存档？", isPresented: $showingDelete) {
                 Button("取消", role: .cancel) {}

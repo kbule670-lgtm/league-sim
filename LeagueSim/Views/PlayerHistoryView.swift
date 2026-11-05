@@ -9,6 +9,7 @@ struct PlayerHistoryView: View {
     var playerName: String
     @EnvironmentObject private var store: LeagueStore
     @State private var foldHonors = true
+    @State private var foldCareer = true
     @State private var foldSeasonRows = true
 
     private var rows: [(seasonNumber: Int, stat: PlayerSeasonStat)] {
@@ -27,7 +28,7 @@ struct PlayerHistoryView: View {
         guard let league = store.currentLeague else { return [] }
         var rosterHonors: [PlayerHonor] = []
         for team in league.teams { for slot in team.roster where slot.player.id == playerId { rosterHonors = slot.player.honors } }
-        // 15 版补回已丢荣誉：编辑球员曾把荣誉清零，但赛季快照是冻结的，从快照里把奖项和总冠军补回来，
+        // 从冻结的赛季快照里把奖项和总冠军补回来，
         // 已有同类型同赛季的去重，不重复。最佳阵容快照里只有名字没有球员 ID，暂不从快照补。
         var seen = Set(rosterHonors.map { "\($0.type)-\($0.seasonNumber)" })
         var merged = rosterHonors
@@ -43,6 +44,30 @@ struct PlayerHistoryView: View {
             }
         }
         return merged.sorted { $0.seasonNumber > $1.seasonNumber }
+    }
+
+    // 生涯统计：全部已跑完赛季的常规赛单场数据汇总（常规赛口径，与各赛季数据一致）。
+    private var career: (games: Int, totalPoints: Int, ppg: Double, triple: Int, double: Int, twenty: Int, thirty: Int, forty: Int, fifty: Int, sixty: Int, high: Int, highSeason: Int) {
+        guard let league = store.currentLeague else { return (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) }
+        var games = 0; var totalPoints = 0; var high = 0; var highSeason = 0
+        var twenty = 0; var thirty = 0; var forty = 0; var fifty = 0; var sixty = 0
+        var allGames: [Game] = []
+        for season in league.seasons {
+            allGames.append(contentsOf: season.games)
+            for game in season.games {
+                for stat in game.boxScore where stat.playerId == playerId {
+                    games += 1; totalPoints += stat.points
+                    if stat.points > high { high = stat.points; highSeason = season.seasonNumber }
+                    if stat.points >= 20 { twenty += 1 }
+                    if stat.points >= 30 { thirty += 1 }
+                    if stat.points >= 40 { forty += 1 }
+                    if stat.points >= 50 { fifty += 1 }
+                    if stat.points >= 60 { sixty += 1 }
+                }
+            }
+        }
+        let counts = SimulationEngine.milestoneCounts(in: allGames)[playerId] ?? (triple: 0, double: 0)
+        return (games, totalPoints, games > 0 ? Double(totalPoints) / Double(games) : 0, counts.triple, counts.double, twenty, thirty, forty, fifty, sixty, high, highSeason)
     }
 
     var body: some View {
@@ -64,6 +89,24 @@ struct PlayerHistoryView: View {
                     Text("\(h.type)：第 \(h.seasonNumber) 赛季 · \(h.teamName) \(h.detail)").font(.caption)
                 }
             }
+            }
+            Section {
+                Button { foldCareer.toggle() } label: {
+                    HStack { Text("生涯统计"); Spacer(); Image(systemName: foldCareer ? "chevron.down" : "chevron.right") }
+                }
+                if foldCareer {
+                    let c = career
+                    if c.games == 0 {
+                        Text("还没有比赛数据。").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text(String(format: "历史总得分 %d 分 · 场均 %.1f 分 · 总上场 %d 场", c.totalPoints, c.ppg, c.games)).font(.caption)
+                        Text("三双 \(c.triple) 次 · 两双 \(c.double) 次（三双不计入两双）").font(.caption)
+                        Text("单场 20+ \(c.twenty) 次 · 30+ \(c.thirty) 次 · 40+ \(c.forty) 次 · 50+ \(c.fifty) 次 · 60+ \(c.sixty) 次").font(.caption)
+                        if c.high > 0 {
+                            Text("单场最高得分 \(c.high) 分（第 \(c.highSeason) 赛季）").font(.caption)
+                        }
+                    }
+                }
             }
             if rows.isEmpty {
                 Section {
