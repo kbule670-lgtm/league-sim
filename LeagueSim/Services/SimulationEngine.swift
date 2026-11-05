@@ -86,6 +86,20 @@ enum SimulationEngine {
         return index < participants.count / 2 ? .east : .west
     }
 
+    // 常规赛对战顺序随机打乱：对阵组合不变（每队仍是 82 场），只把比赛顺序用种子随机洗牌，
+    // 同一名单 + 同一种子重跑，顺序相同。
+    static func shuffledSchedule(_ pairs: [(home: Team, away: Team)], seed: Int64) -> [(home: Team, away: Team)] {
+        var result = pairs
+        var rng = SeededRandom(seed: seed &+ 987654321)
+        if result.count > 1 {
+            for index in stride(from: result.count - 1, through: 1, by: -1) {
+                let other = rng.nextInt(in: 0...index)
+                result.swapAt(index, other)
+            }
+        }
+        return result
+    }
+
     // MARK: - 常规赛赛程（返回主客队对，每队恰好 82 场）
     static func regularSeasonSchedule(participants: [Team]) -> [(home: Team, away: Team)] {
         guard participants.count >= 2 else { return [] }
@@ -461,8 +475,7 @@ enum SimulationEngine {
     // 单场 box：先按出手权分得分，再按篮板/组织能力分篮板助攻，
     // 最后把四舍五入的余差补给本队得分最高的人，保证 box 得分和等于球队比分。
     // 出手权 = 总评^3 × 上场时间：总评越高、上场越久，出手越多。
-    // 以前只用总评^1.5 且不看时间，替补和首发得分拉不开，用户反馈后改成这样。
-    // 得分定下来后，再把每人的得分拆成两分/三分/罚球（见 decomposeShooting），
+        // 得分定下来后，再把每人的得分拆成两分/三分/罚球（见 decomposeShooting），
     // 保证 2*两分命中 + 3*三分命中 + 罚球命中 = 该球员得分，一分不差。
     static func boxScore(home: Team, homePlaying: [RosterSlot], away: Team, awayPlaying: [RosterSlot], homeScore: Int, awayScore: Int,
                                  rng: inout SeededRandom) -> [PlayerGameStat] {
@@ -490,8 +503,13 @@ enum SimulationEngine {
                 let baseMinutes = Int(minutes(for: slot, in: active).rounded())
                 variedMinutes.append(max(5, min(40, baseMinutes + rng.nextInt(in: -4...4))))
             }
+            // 出手权：按球员总评相对本队上场阵容平均总评算，高越多出手越多、低越少，
+            // 不是只看绝对总评：同队里 90 分的比 70 分的多，弱队里的头牌也比强队里的角色球员多。
+            let teamAvgRating = active.isEmpty ? 70.0 : Double(active.map { Rating.overall(for: $0.player) }.reduce(0, +)) / Double(active.count)
             let weights = active.enumerated().map { (index, slot) in
-                pow(Double(Rating.overall(for: slot.player)), 3.0)
+                let overall = Double(Rating.overall(for: slot.player))
+                let relative = max(0.5, min(1.6, overall / max(1.0, teamAvgRating)))
+                return pow(relative, 3.0) * 100.0
                     * (Double(variedMinutes[index]) / 20.0)
                     * forms[index]
             }
@@ -502,7 +520,7 @@ enum SimulationEngine {
                 let player = slot.player
                 players.append(player)
                 let share = weightSum > 0 ? weights[index] / weightSum : 1.0 / Double(active.count)
-                let rawPoints = Double(teamScore) * share * (0.90 + rng.nextDouble() * 0.20)
+                let rawPoints = Double(teamScore) * share * (0.75 + rng.nextDouble() * 0.50)
                 let minutes = variedMinutes[index]
                 // 篮板：篮板能力 + 位置系数（内线拿得多），助攻：组织能力主导。
                 let positionReboundBonus: Double
@@ -514,9 +532,9 @@ enum SimulationEngine {
                 case .pg: positionReboundBonus = 0.6
                 }
                 let rebounds = Int(((Double(player.attributes.rebounding) / 100.0) * 12.0 * positionReboundBonus
-                    * (0.6 + rng.nextDouble() * 0.8)).rounded())
+                    * (0.5 + rng.nextDouble() * 1.0)).rounded())
                 let assists = Int(((Double(player.attributes.playmaking) / 100.0) * 9.0
-                    * (0.6 + rng.nextDouble() * 0.8)).rounded())
+                    * (0.5 + rng.nextDouble() * 1.0)).rounded())
                 let steals = Int(((Double(player.attributes.perimeterDefense) / 100.0) * 2.0
                     * rng.nextDouble()).rounded())
                 let blocks = Int(((Double(player.attributes.rimProtection) / 100.0) * 2.0
@@ -698,6 +716,37 @@ enum SimulationEngine {
         switch round { case 1: return "首轮"; case 2: return "分区半决赛"; case 3: return "分区决赛"; case 4: return "总决赛"; default: return "季后赛" }
     }
 
+    // 三双/两双统计（NBA 判定）：得分、篮板、助攻、抢断、盖帽五项里 >=10 的项数，
+    // >=3 项是三双，恰好 2 项是两双，三双不计入两双。
+    static func milestoneCounts(in games: [Game]) -> [UUID: (triple: Int, double: Int)] {
+        var counts: [UUID: (triple: Int, double: Int)] = [:]
+        for game in games {
+            for stat in game.boxScore {
+                let categories = [stat.points, stat.rebounds, stat.assists, stat.steals, stat.blocks].filter { $0 >= 10 }.count
+                if categories >= 3 {
+                    counts[stat.playerId, default: (0, 0)].triple += 1
+                } else if categories == 2 {
+                    counts[stat.playerId, default: (0, 0)].double += 1
+                }
+            }
+        }
+        return counts
+    }
+
+    // 历史单场得分最高：返回 (球员名, 队名, 得分, 赛季号, 对手)，按得分降序。
+    static func topScoringGames(in seasons: [SeasonSnapshot], limit: Int) -> [(playerName: String, teamName: String, points: Int, seasonNumber: Int, opponent: String)] {
+        var rows: [(playerName: String, teamName: String, points: Int, seasonNumber: Int, opponent: String)] = []
+        for season in seasons {
+            for game in season.games + season.playoffGames {
+                for stat in game.boxScore {
+                    let opponent = stat.teamId == game.homeTeamId ? game.awayTeamName : game.homeTeamName
+                    rows.append((stat.playerName, stat.teamId == game.homeTeamId ? game.homeTeamName : game.awayTeamName, stat.points, season.seasonNumber, opponent))
+                }
+            }
+        }
+        return Array(rows.sorted { $0.points > $1.points }.prefix(limit))
+    }
+
     // 奖项：得分王/篮板王/助攻王/抢断王/盖帽王按场均最高（出场至少一半，凑不够就全算）；
     // DPOY 按抢断+盖帽综合；MVP 按场均分+板+助×1.5+抢断×2+盖帽×2+球队胜场×0.15；
     // 最佳阵容按每个位置场均分排前三；FMVP 按冠军队总决赛场均分最高（败方再高也不给）。
@@ -736,7 +785,7 @@ enum SimulationEngine {
         var fmvpId: UUID? = nil
         if !finalsGames.isEmpty {
             let finalsStats = aggregatePlayerStats(games: finalsGames, seasonId: snapshotId, positionMap: positionMap)
-            // 15 版修 FMVP 给败方：只在冠军队里比总决赛场均分，冠军未知时不发 FMVP，绝不再给败方。
+            // FMVP 只在冠军队里比总决赛场均分，冠军未知时不发 FMVP。
             let finalsPool = championTeamId != nil ? finalsStats.filter { $0.teamId == championTeamId } : []
             if let fmvp = finalsPool.max(by: { $0.pointsPerGame < $1.pointsPerGame }) {
                 fmvpId = fmvp.playerId
@@ -763,18 +812,26 @@ enum SimulationEngine {
         if points == 0 {
             let fieldGoalsAttempted = rng.nextInt(in: 0...3)
             let threeAttempted = min(fieldGoalsAttempted, rng.nextInt(in: 0...2))
-            let freeThrowsAttempted = rng.nextInt(in: 0...2)
+            // 0 出手不能只有 1 个罚球（1 罚只能是 2+1/3+1 的加罚，得先有投篮命中）：0 出手时罚球为 0。
+            let freeThrowsAttempted = fieldGoalsAttempted == 0 ? 0 : rng.nextInt(in: 0...1) * 2
             return (0, fieldGoalsAttempted, 0, threeAttempted, 0, freeThrowsAttempted)
         }
-        let threeShare = clamp(0.15 + Double(attrs.threePoint - 50) * 0.004, 0.10, 0.50)
-        // 13 版上调：99 三分以前只有约 33.8%（0.28+0.058），朋友反馈太烧心。
-        // 新口径：70 分约 34%，99 分约 44%，50 分约 27%（clamp 25%），仍拉得开档次。
-        let threePercentage = clamp(0.34 + Double(attrs.threePoint - 70) * 0.0035
-            + (rng.nextDouble() - 0.5) * 0.16, 0.25, 0.48)
+        // 出手倾向：内线三分占比减半，外线三分占比提高，综合正常。
+        let tendencyThreeMultiplier: Double
+        switch player.tendency {
+        case .inside: tendencyThreeMultiplier = 0.45
+        case .outside: tendencyThreeMultiplier = 1.7
+        case .balanced: tendencyThreeMultiplier = 1.0
+        }
+        let threeShare = clamp((0.15 + Double(attrs.threePoint - 50) * 0.004) * tendencyThreeMultiplier, 0.05, 0.65)
+        // 三分命中率：评分越高越高，99 分约 50%，90 分约 46%，80 分约 42%，70 分约 38%。
+        let threePercentage = clamp(0.38 + Double(attrs.threePoint - 70) * 0.004
+            + (rng.nextDouble() - 0.5) * 0.10, 0.28, 0.55)
         let freeThrowPercentage = clamp(0.74 + Double(attrs.freeThrow - 70) * 0.003, 0.65, 0.94)
         let shootingAverage = Double(attrs.threePoint + attrs.midRange + attrs.finishing) / 3.0
-        // 13 版上调：99 投射（三分/中投/终结均值 99）以前只有约 43.8%，新口径 70 分约 44%、99 分约 54%、50 分约 38%。
-        let fieldGoalPercentage = clamp((0.44 + (shootingAverage - 70.0) * 0.0035) * shootingForm, 0.30, 0.68)
+        // 总命中率：评分越高越高，99 分约 55%（再乘手感、封顶 62%），70 分约 46%，
+        // 目标是前 30 大于 43%、前十约 50%、前三约 58%（只统计场均出手 >= 4 次的球员）。
+        let fieldGoalPercentage = clamp((0.46 + (shootingAverage - 70.0) * 0.003) * shootingForm, 0.30, 0.62)
         var threeMade = Int((Double(points) * threeShare / 3.0).rounded())
         threeMade = min(max(threeMade, 0), points / 3)
         if rng.nextDouble() < 0.3 && threeMade > 0 { threeMade -= 1 }
@@ -794,9 +851,10 @@ enum SimulationEngine {
         } else {
             threeAttempted = max(threeMade, Int((Double(threeMade) / threePercentage).rounded()))
         }
-        let freeThrowsAttempted: Int
+        var freeThrowsAttempted: Int
         if freeThrowsMade == 0 {
-            freeThrowsAttempted = rng.nextInt(in: 0...1)
+            // 没罚进就只有 0 罚或 2 罚，不能只有 1 罚（1 罚必须是加罚，得先罚进一个）。
+            freeThrowsAttempted = rng.nextInt(in: 0...1) * 2
         } else {
             freeThrowsAttempted = max(freeThrowsMade, Int((Double(freeThrowsMade) / freeThrowPercentage).rounded()))
         }
@@ -806,6 +864,10 @@ enum SimulationEngine {
                                      Int((Double(fieldGoalsMade) / fieldGoalPercentage).rounded()))
         }
         fieldGoalsAttempted = max(fieldGoalsAttempted, threeAttempted + twoMade)
+        // 罚球兜底：只有 1 个罚球时必须是 2+1/3+1 的加罚，得有投篮命中；否则改成 2 罚（罚中数不变，总分不变）。
+        if freeThrowsAttempted == 1 && fieldGoalsMade == 0 {
+            freeThrowsAttempted = 2
+        }
         return (fieldGoalsMade, fieldGoalsAttempted, threeMade, threeAttempted,
                 freeThrowsMade, freeThrowsAttempted)
     }

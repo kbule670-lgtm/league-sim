@@ -16,7 +16,7 @@ enum Validation {
         if team.starters.count != 5 {
             list.append("首发是 \(team.starters.count) 人，应为 5 人")
         }
-        var seenNumbers: [Int: String] = [:]
+        var seenNumbers: [String: String] = [:]
         for slot in team.roster {
             if let other = seenNumbers[slot.player.jerseyNumber] {
                 list.append("球衣号 \(slot.player.jerseyNumber) 冲突：\(other) 与 \(slot.player.name)")
