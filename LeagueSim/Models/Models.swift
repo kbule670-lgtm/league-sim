@@ -516,9 +516,12 @@ extension Player {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
-        if let raw = try c.decodeIfPresent(String.self, forKey: .jerseyNumber) {
+        // 球衣号兼容读：17 版之前存的是数字（如 23），17 版之后存的是文字（如 "00"）。
+        // 注意 decodeIfPresent 遇到类型不对会直接抛错、不会返回 nil，所以不能用它做类型分支，
+        // 必须用 try? 逐个试：先试文字，失败再试数字，都失败才补 "0"。
+        if let raw = try? c.decode(String.self, forKey: .jerseyNumber) {
             jerseyNumber = raw
-        } else if let num = try c.decodeIfPresent(Int.self, forKey: .jerseyNumber) {
+        } else if let num = try? c.decode(Int.self, forKey: .jerseyNumber) {
             jerseyNumber = "\(num)"
         } else {
             jerseyNumber = "0"
