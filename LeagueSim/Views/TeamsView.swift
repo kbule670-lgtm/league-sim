@@ -153,32 +153,40 @@ struct TeamDetailView: View {
                     }
                     if sorting {
                         Section {
-                            Text("长按行右侧的拖动把手，上下拖动排序；只在同一组里排（首发里排首发、替补里排替补），改首发/替补先点右上角“完成”，再用行里的状态菜单。")
+                            Text("长按行右侧的拖动把手上下拖：前 5 名是首发，往上拖进前五就变首发，往下拖就变替补，行上的首发/替补跟着变。")
                                 .font(.footnote).foregroundStyle(.secondary)
                         }
-                    }
-                    Section("首发（\(team.starters.count) / 5）") {
-                        ForEach(team.starters) { slot in
-                            PlayerRow(teamId: team.id, slot: slot)
+                        Section("球员排序（前 5 名首发）") {
+                            ForEach(team.activeRoster) { slot in
+                                PlayerRow(teamId: team.id, slot: slot)
+                            }
+                            .onMove { source, destination in
+                                store.moveActivePlayer(in: team.id, from: source, to: destination)
+                            }
                         }
-                        .onMove { source, destination in
-                            store.movePlayers(in: team.id, from: source, to: destination, status: .starter)
+                        Section("inactive（\(team.inactive.count) 人）") {
+                            ForEach(team.inactive) { slot in
+                                PlayerRow(teamId: team.id, slot: slot)
+                            }
+                            .onMove { source, destination in
+                                store.movePlayers(in: team.id, from: source, to: destination, status: .inactive)
+                            }
                         }
-                    }
-                    Section("替补（\(team.bench.count) 人）") {
-                        ForEach(team.bench) { slot in
-                            PlayerRow(teamId: team.id, slot: slot)
+                    } else {
+                        Section("首发（\(team.starters.count) / 5）") {
+                            ForEach(team.starters) { slot in
+                                PlayerRow(teamId: team.id, slot: slot)
+                            }
                         }
-                        .onMove { source, destination in
-                            store.movePlayers(in: team.id, from: source, to: destination, status: .bench)
+                        Section("替补（\(team.bench.count) 人）") {
+                            ForEach(team.bench) { slot in
+                                PlayerRow(teamId: team.id, slot: slot)
+                            }
                         }
-                    }
-                    Section("inactive（\(team.inactive.count) 人）") {
-                        ForEach(team.inactive) { slot in
-                            PlayerRow(teamId: team.id, slot: slot)
-                        }
-                        .onMove { source, destination in
-                            store.movePlayers(in: team.id, from: source, to: destination, status: .inactive)
+                        Section("inactive（\(team.inactive.count) 人）") {
+                            ForEach(team.inactive) { slot in
+                                PlayerRow(teamId: team.id, slot: slot)
+                            }
                         }
                     }
                     Section {
@@ -277,6 +285,13 @@ private struct PlayerRow: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            if isSorting {
+                Text(slot.status.rawValue)
+                    .font(.caption)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.15))
+                    .clipShape(Capsule())
+            }
             if !isSorting {
                 Menu(slot.status.rawValue) {
                     ForEach(RosterStatus.allCases) { status in
