@@ -152,8 +152,14 @@ struct BroadcastView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("\(game.homeTeamName) \(currentHome) : \(currentAway) \(game.awayTeamName)")
                     .font(.title3).bold()
-                Text("剩余时间 \(currentTime) · 终场 \(game.homeScore) : \(game.awayScore)")
-                    .font(.caption).foregroundStyle(.secondary)
+                // 播报结束前不露终场比分：只显示剩余时间，播完才给出总结果。
+                if player.isFinished {
+                    Text("剩余时间 \(currentTime) · 终场 \(game.homeScore) : \(game.awayScore)")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("剩余时间 \(currentTime)")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if player.isFinished {
                     Text("终场哨响，比分已定。")
                         .font(.caption).foregroundStyle(.secondary)
@@ -201,13 +207,18 @@ struct BroadcastView: View {
                         HStack { Text("实时球员数据（上场情况 + 得分）"); Spacer(); Image(systemName: foldLiveStats ? "chevron.down" : "chevron.right") }
                     }
                     if foldLiveStats {
-                        Text("上场情况看出场分钟：分钟 > 0 就是上过场；实时得分随播报进度涨，全场数据是这场的最终数据。")
+                        Text("上场情况看出场分钟：分钟 > 0 就是上过场；实时得分随播报进度涨，全场数据播完才显示。")
                             .font(.caption).foregroundStyle(.secondary)
                         ForEach([game.homeTeamId, game.awayTeamId], id: \.self) { teamId in
                             Text(teamId == game.homeTeamId ? game.homeTeamName : game.awayTeamName).font(.headline)
                             ForEach(game.boxScore.filter { $0.teamId == teamId }, id: \.playerId) { stat in
-                                Text("\(stat.playerName)：实时 \(livePoints(for: stat)) 分 · 全场 \(stat.points) 分 \(stat.rebounds) 板 \(stat.assists) 助 · 出场 \(stat.minutes) 分钟")
-                                    .font(.caption)
+                                if player.isFinished {
+                                    Text("\(stat.playerName)：实时 \(livePoints(for: stat)) 分 · 全场 \(stat.points) 分 \(stat.rebounds) 板 \(stat.assists) 助 · 出场 \(stat.minutes) 分钟")
+                                        .font(.caption)
+                                } else {
+                                    Text("\(stat.playerName)：实时 \(livePoints(for: stat)) 分 · 出场 \(stat.minutes) 分钟")
+                                        .font(.caption)
+                                }
                             }
                         }
                     }
