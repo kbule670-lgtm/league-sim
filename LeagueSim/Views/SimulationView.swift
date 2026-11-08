@@ -24,6 +24,7 @@ struct SimulationView: View {
     @State private var foldLeaderboard = false
     @State private var foldSchedule = true
     @State private var foldSimPlayoffSeries = true
+    @State private var foldOngoingBracket = true
 
     private var league: League? { store.currentLeague }
 
@@ -179,14 +180,26 @@ struct SimulationView: View {
             if ongoing.playoffRound >= 1 {
                 Section {
                 Button { foldSimPlayoffSeries.toggle() } label: {
-                    HStack { Text("季后赛系列赛"); Spacer(); Image(systemName: foldSimPlayoffSeries ? "chevron.down" : "chevron.right") }
+                    HStack { Text("季后赛系列赛（点进去看各场比赛）"); Spacer(); Image(systemName: foldSimPlayoffSeries ? "chevron.down" : "chevron.right") }
                 }
                 if foldSimPlayoffSeries {
                     if ongoing.playoffSeries.isEmpty { Text("还没打季后赛。").font(.caption).foregroundStyle(.secondary) }
                     ForEach(ongoing.playoffSeries) { series in
-                        Text("\(series.conference)\(series.round)：\(series.higherSeed) 号 \(series.higherSeedTeamName) \(series.higherWins):\(series.lowerWins) \(series.lowerSeed) 号 \(series.lowerSeedTeamName)")
-                            .font(.caption)
+                        NavigationLink {
+                            OngoingPlayoffSeriesView(series: series, games: ongoing.playoffGames, seasonSeed: ongoing.seed)
+                        } label: {
+                            Text("\(series.conference)\(series.round)：\(series.higherSeed) 号 \(series.higherSeedTeamName) \(series.higherWins):\(series.lowerWins) \(series.lowerSeed) 号 \(series.lowerSeedTeamName)")
+                                .font(.caption)
+                        }
                     }
+                }
+            }
+                Section {
+                Button { foldOngoingBracket.toggle() } label: {
+                    HStack { Text("季后赛对阵图（东西部 8 进 4、4 进 2、2 进 1、总决赛）"); Spacer(); Image(systemName: foldOngoingBracket ? "chevron.down" : "chevron.right") }
+                }
+                if foldOngoingBracket {
+                    PlayoffBracketView(series: ongoing.playoffSeries, championTeamName: nil)
                 }
             }
             }
@@ -272,6 +285,8 @@ struct HistoryView: View {
     @State private var foldDivisions = false
     @State private var foldSeasonAwardsOverview = true
     @State private var foldHistoryLeaderboard = false
+    @State private var foldHistoryBracket = true
+    @State private var historyLeaderScope = "总数据"
     @State private var foldTopScoring = false
     @State private var foldTradeHistory = false
     @State private var historyLeaderCategory = "得分"
@@ -285,13 +300,20 @@ struct HistoryView: View {
     }
 
     // 跨赛季累计：同一球员各赛季统计相加，队名取最近一个赛季的。
-    private func historyAggregatedStats(seasons: [SeasonSnapshot]) -> [PlayerSeasonStat] {
+    // 范围分三档：总数据 = 常规赛 + 季后赛，常规赛只算常规赛，季后赛只算季后赛。
+    private func historyAggregatedStats(seasons: [SeasonSnapshot], scope: String = "总数据") -> [PlayerSeasonStat] {
         var totals: [UUID: PlayerSeasonStat] = [:]
         for season in seasons.sorted(by: { $0.seasonNumber < $1.seasonNumber }) {
-            for stat in season.playerStats {
+            let sources: [PlayerSeasonStat]
+            switch scope {
+            case "常规赛": sources = season.playerStats
+            case "季后赛": sources = season.playoffPlayerStats
+            default: sources = season.playerStats + season.playoffPlayerStats
+            }
+            for stat in sources {
                 var total = totals[stat.playerId] ?? PlayerSeasonStat(playerId: stat.playerId, playerName: stat.playerName, teamId: stat.teamId, teamName: stat.teamName, seasonId: season.id, games: 0, totalPoints: 0, totalRebounds: 0, totalAssists: 0, totalSteals: 0, totalBlocks: 0, totalMinutes: 0)
                 total.games += stat.games; total.totalPoints += stat.totalPoints; total.totalRebounds += stat.totalRebounds; total.totalAssists += stat.totalAssists; total.totalSteals += stat.totalSteals; total.totalBlocks += stat.totalBlocks; total.totalMinutes += stat.totalMinutes
-                total.totalFieldGoalsMade += stat.totalFieldGoalsMade; total.totalFieldGoalsAttempted += stat.totalFieldGoalsAttempted; total.totalThreeMade += stat.totalThreeMade; total.totalThreeAttempted += stat.totalThreeAttempted; total.totalFreeThrowsMade += stat.totalFreeThrowsMade; total.totalFreeThrowsAttempted += stat.totalFreeThrowsAttempted; total.totalFouls += stat.totalFouls
+                total.totalFieldGoalsMade += stat.totalFieldGoalsMade; total.totalFieldGoalsAttempted += stat.totalFieldGoalsAttempted; total.totalThreeMade += stat.totalThreeMade; total.totalThreeAttempted += stat.totalThreeAttempted; total.totalFreeThrowsMade += stat.totalFreeThrowsMade; total.totalFreeThrowsAttempted += stat.totalFreeThrowsAttempted; total.totalFouls += stat.totalFouls; total.tripleDoubles += stat.tripleDoubles; total.doubleDoubles += stat.doubleDoubles
                 total.teamName = stat.teamName; total.teamId = stat.teamId; total.playerName = stat.playerName
                 totals[stat.playerId] = total
             }
@@ -299,14 +321,18 @@ struct HistoryView: View {
         return Array(totals.values)
     }
 
+    // 历史榜：得分按场均（累计出场至少 82 场），总得分按累计总分；
+    // 篮板/助攻/抢断/盖帽按累计总个数（不是场均）；三双/两双按累计次数。
     private func historyRankedStats(stats: [PlayerSeasonStat], category: String) -> [PlayerSeasonStat] {
         switch category {
         case "得分": return stats.filter { $0.games >= 82 }.sorted { $0.pointsPerGame > $1.pointsPerGame }
         case "总得分": return stats.sorted { $0.totalPoints > $1.totalPoints }
-        case "篮板": return stats.filter { $0.games >= 82 }.sorted { $0.reboundsPerGame > $1.reboundsPerGame }
-        case "助攻": return stats.filter { $0.games >= 82 }.sorted { $0.assistsPerGame > $1.assistsPerGame }
-        case "抢断": return stats.filter { $0.games >= 82 }.sorted { $0.stealsPerGame > $1.stealsPerGame }
-        case "盖帽": return stats.filter { $0.games >= 82 }.sorted { $0.blocksPerGame > $1.blocksPerGame }
+        case "篮板": return stats.sorted { $0.totalRebounds > $1.totalRebounds }
+        case "助攻": return stats.sorted { $0.totalAssists > $1.totalAssists }
+        case "抢断": return stats.sorted { $0.totalSteals > $1.totalSteals }
+        case "盖帽": return stats.sorted { $0.totalBlocks > $1.totalBlocks }
+        case "三双": return stats.sorted { $0.tripleDoubles > $1.tripleDoubles }
+        case "两双": return stats.sorted { $0.doubleDoubles > $1.doubleDoubles }
         case "投篮": return stats.filter { $0.games > 0 && Double($0.totalFieldGoalsAttempted) / Double($0.games) >= 4 }.sorted { $0.fieldGoalPercentage > $1.fieldGoalPercentage }
         case "三分": return stats.filter { $0.games > 0 && Double($0.totalFieldGoalsAttempted) / Double($0.games) >= 4 }.sorted { $0.threePercentage > $1.threePercentage }
         case "罚球": return stats.filter { $0.totalFreeThrowsAttempted >= 300 }.sorted { $0.freeThrowPercentage > $1.freeThrowPercentage }
@@ -318,10 +344,12 @@ struct HistoryView: View {
         switch category {
         case "得分": return String(format: "场均 %.1f 分 · 出场 %d 场", stat.pointsPerGame, stat.games)
         case "总得分": return String(format: "累计 %d 分 · 出场 %d 场", stat.totalPoints, stat.games)
-        case "篮板": return String(format: "场均 %.1f 板 · 出场 %d 场", stat.reboundsPerGame, stat.games)
-        case "助攻": return String(format: "场均 %.1f 助 · 出场 %d 场", stat.assistsPerGame, stat.games)
-        case "抢断": return String(format: "场均 %.1f 断 · 出场 %d 场", stat.stealsPerGame, stat.games)
-        case "盖帽": return String(format: "场均 %.1f 帽 · 出场 %d 场", stat.blocksPerGame, stat.games)
+        case "篮板": return String(format: "累计 %d 板 · 出场 %d 场", stat.totalRebounds, stat.games)
+        case "助攻": return String(format: "累计 %d 助 · 出场 %d 场", stat.totalAssists, stat.games)
+        case "抢断": return String(format: "累计 %d 断 · 出场 %d 场", stat.totalSteals, stat.games)
+        case "盖帽": return String(format: "累计 %d 帽 · 出场 %d 场", stat.totalBlocks, stat.games)
+        case "三双": return String(format: "累计 %d 次 · 出场 %d 场", stat.tripleDoubles, stat.games)
+        case "两双": return String(format: "累计 %d 次 · 出场 %d 场", stat.doubleDoubles, stat.games)
         case "投篮": return String(format: "%.1f%% · %d/%d", stat.fieldGoalPercentage * 100, stat.totalFieldGoalsMade, stat.totalFieldGoalsAttempted)
         case "三分": return String(format: "%.1f%% · %d/%d", stat.threePercentage * 100, stat.totalThreeMade, stat.totalThreeAttempted)
         case "罚球": return String(format: "%.1f%% · %d/%d", stat.freeThrowPercentage * 100, stat.totalFreeThrowsMade, stat.totalFreeThrowsAttempted)
@@ -395,11 +423,13 @@ struct HistoryView: View {
                             HStack { Text("历史数据榜前 30（跨赛季累计）"); Spacer(); Image(systemName: foldHistoryLeaderboard ? "chevron.down" : "chevron.right") }
                         }
                         if foldHistoryLeaderboard {
+                            Picker("范围", selection: $historyLeaderScope) {
+                                Text("总数据").tag("总数据"); Text("常规赛").tag("常规赛"); Text("季后赛").tag("季后赛")
+                            }.pickerStyle(.segmented)
                             Picker("数据", selection: $historyLeaderCategory) {
-                                ForEach(["得分", "总得分", "篮板", "助攻", "抢断", "盖帽", "投篮", "三分", "罚球"], id: \.self) { Text($0) }
+                                ForEach(["得分", "总得分", "篮板", "助攻", "抢断", "盖帽", "三双", "两双", "投篮", "三分", "罚球"], id: \.self) { Text($0) }
                             }
-                            .pickerStyle(.segmented)
-                            let aggregated = historyAggregatedStats(seasons: seasons)
+                            let aggregated = historyAggregatedStats(seasons: seasons, scope: historyLeaderScope)
                             let ranked = historyRankedStats(stats: aggregated, category: historyLeaderCategory)
                             if ranked.isEmpty {
                                 Text("还没有跨赛季数据：跑完一赛季后这里才有。").font(.caption).foregroundStyle(.secondary)
@@ -411,7 +441,7 @@ struct HistoryView: View {
                                     Text(historyLeaderValueText(stat: stat, category: historyLeaderCategory)).font(.caption).foregroundStyle(.secondary)
                                 }
                             }
-                            Text("得分榜按场均排（累计出场至少 82 场），总得分榜按累计总分排（不设出场门槛）；命中率榜只统计场均出手 >= 4 次的球员，老快照投篮为 0 的不进命中率榜。").font(.caption).foregroundStyle(.secondary)
+                            Text("得分榜按场均排（累计出场至少 82 场），总得分、篮板、助攻、抢断、盖帽、三双、两双按累计总数排；命中率榜只统计场均出手 >= 4 次的球员，老快照投篮为 0 的不进命中率榜。范围分总数据（常规赛 + 季后赛）、常规赛、季后赛三档。").font(.caption).foregroundStyle(.secondary)
                         }
                     }
                     Section {
@@ -502,6 +532,14 @@ struct HistoryView: View {
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                         }
+                        Section {
+                Button { foldHistoryBracket.toggle() } label: {
+                    HStack { Text("季后赛对阵图（东西部 8 进 4、4 进 2、2 进 1、总决赛）"); Spacer(); Image(systemName: foldHistoryBracket ? "chevron.down" : "chevron.right") }
+                }
+                if foldHistoryBracket {
+                    PlayoffBracketView(series: season.playoffSeries, championTeamName: season.championTeamName)
+                }
+            }
                         if !season.awards.isEmpty || !season.seasonLeaders.isEmpty {
                             Section {
                 Button { foldAwards.toggle() } label: {
@@ -514,13 +552,13 @@ struct HistoryView: View {
                                         .font(.caption)
                                 }
                                 if !season.allNBAFirst.isEmpty {
-                                    Text("最佳一阵：\(season.allNBAFirst.map { "\($0.position) \($0.playerName)" }.joined(separator: "、"))").font(.caption)
+                                    Text(allNBAText(entries: season.allNBAFirst, title: "最佳一阵")).font(.caption)
                                 }
                                 if !season.allNBASecond.isEmpty {
-                                    Text("最佳二阵：\(season.allNBASecond.map { "\($0.position) \($0.playerName)" }.joined(separator: "、"))").font(.caption)
+                                    Text(allNBAText(entries: season.allNBASecond, title: "最佳二阵")).font(.caption)
                                 }
                                 if !season.allNBAThird.isEmpty {
-                                    Text("最佳三阵：\(season.allNBAThird.map { "\($0.position) \($0.playerName)" }.joined(separator: "、"))").font(.caption)
+                                    Text(allNBAText(entries: season.allNBAThird, title: "最佳三阵")).font(.caption)
                                 }
                                 ForEach(season.seasonLeaders, id: \.category) { leader in
                                     Text("\(leader.category)：\(leader.playerName)（\(leader.teamName)） \(leader.valueText)")
@@ -664,6 +702,149 @@ private struct PlayoffSeriesDetailView: View {
             }
         }
         .navigationTitle("\(series.conference)\(series.round)")
+    }
+}
+
+// 最佳阵容一行：有东西部字段时按东部/西部两组写，老快照没有字段时按原来一行写。
+private func allNBAText(entries: [AllNBAEntry], title: String) -> String {
+    if entries.isEmpty { return "" }
+    if entries.allSatisfy({ $0.conference.isEmpty }) {
+        return "\(title)：\(entries.map { "\($0.position) \($0.playerName)" }.joined(separator: "、"))"
+    }
+    let parts = ["东部", "西部"].compactMap { conf -> String? in
+        let group = entries.filter { $0.conference == conf }
+        guard !group.isEmpty else { return nil }
+        return "\(conf)：\(group.map { "\($0.position) \($0.playerName)" }.joined(separator: "、"))"
+    }
+    return "\(title)：\(parts.joined(separator: "；"))"
+}
+
+// 进行中赛季的季后赛系列赛详情：点进一轮，先看这轮的各场比赛比分，再点进单场看 box 与播报。
+private struct OngoingPlayoffSeriesView: View {
+    var series: PlayoffSeries
+    var games: [Game]
+    var seasonSeed: Int64
+
+    private var seriesGames: [Game] {
+        series.gameIds.compactMap { id in games.first { $0.id == id } }
+    }
+
+    var body: some View {
+        List {
+            Section("\(series.conference)\(series.round)") {
+                Text("\(series.higherSeed) 号种子 \(series.higherSeedTeamName) \(series.higherWins):\(series.lowerWins) \(series.lowerSeed) 号种子 \(series.lowerSeedTeamName)")
+                Text("胜者：\(series.winnerTeamName)")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("各场比赛（点进去看 box，里面有虚拟播报）") {
+                if seriesGames.isEmpty {
+                    Text("本轮没有单场数据").foregroundStyle(.secondary)
+                } else {
+                    ForEach(seriesGames) { game in
+                        NavigationLink {
+                            GameDetailView(game: game, seasonSeed: seasonSeed)
+                        } label: {
+                            Text("\(game.homeTeamName) \(game.homeScore) : \(game.awayScore) \(game.awayTeamName)")
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("\(series.conference)\(series.round)")
+    }
+}
+
+// 季后赛对阵图：左西部、右东部、中间总决赛；每轮一列，首轮 8 进 4、半决赛 4 进 2、
+// 分区决赛 2 进 1、总决赛 1 场定冠军。卡片写种子号 + 球队名 + 系列赛胜场，不用球队图标、不写年份。
+// 只按 series 数据画：已打的轮次显示比分，未打的轮次按上一轮胜者显示“待定”对阵。
+struct PlayoffBracketView: View {
+    var series: [PlayoffSeries]
+    var championTeamName: String?
+
+    private func seriesList(conference: String, round: String) -> [PlayoffSeries] {
+        series.filter { $0.conference == conference && $0.round == round }
+            .sorted { $0.higherSeed < $1.higherSeed }
+    }
+
+    private func seriesCard(_ s: PlayoffSeries) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack { Text("\(s.higherSeed)").font(.caption2).foregroundStyle(.secondary); Text(s.higherSeedTeamName).font(.caption).lineLimit(1); Spacer(); Text("\(s.higherWins)").font(.caption).bold() }
+            HStack { Text("\(s.lowerSeed)").font(.caption2).foregroundStyle(.secondary); Text(s.lowerSeedTeamName).font(.caption).lineLimit(1); Spacer(); Text("\(s.lowerWins)").font(.caption).bold() }
+        }
+        .padding(6)
+        .frame(width: 132)
+        .background(Color(.secondarySystemBackground))
+        .cornerRadius(8)
+    }
+
+    private func pendingCard(_ teamA: String, _ teamB: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack { Text(teamA).font(.caption).lineLimit(1); Spacer(); Text("待定").font(.caption2).foregroundStyle(.secondary) }
+            HStack { Text(teamB).font(.caption).lineLimit(1); Spacer(); Text("待定").font(.caption2).foregroundStyle(.secondary) }
+        }
+        .padding(6)
+        .frame(width: 132)
+        .background(Color(.secondarySystemBackground))
+        .cornerRadius(8)
+    }
+
+    // 某分区某一轮的卡片：有系列赛就画比分，没有就按上一轮胜者画待定对阵。
+    private func roundCards(conference: String, round: String) -> [AnyView] {
+        let played = seriesList(conference: conference, round: round)
+        if !played.isEmpty { return played.map { AnyView(seriesCard($0)) } }
+        let previous: String
+        switch round {
+        case "分区半决赛": previous = "首轮"
+        case "分区决赛": previous = "分区半决赛"
+        default: return []
+        }
+        let prevWinners = seriesList(conference: conference, round: previous).map { $0.winnerTeamName }
+        var cards: [AnyView] = []
+        var i = 0
+        while i + 1 < prevWinners.count {
+            cards.append(AnyView(pendingCard(prevWinners[i], prevWinners[i + 1])))
+            i += 2
+        }
+        return cards
+    }
+
+    private func bracketColumn(title: String, cards: [AnyView]) -> some View {
+        VStack(spacing: 8) {
+            Text(title).font(.caption).bold()
+            ForEach(Array(cards.enumerated()), id: \.offset) { _, card in card }
+            if cards.isEmpty { Text("待定").font(.caption).foregroundStyle(.secondary) }
+        }
+    }
+
+    private var finalsColumn: some View {
+        VStack(spacing: 8) {
+            Text("总决赛").font(.caption).bold()
+            let finals = seriesList(conference: "总决赛", round: "总决赛")
+            if let f = finals.first { seriesCard(f) } else { Text("待定").font(.caption).foregroundStyle(.secondary) }
+            if let champ = championTeamName {
+                Text("总冠军").font(.caption2).foregroundStyle(.secondary)
+                Text(champ).font(.caption).bold()
+            }
+        }
+    }
+
+    var body: some View {
+        if series.isEmpty {
+            Text("季后赛还没开始。").font(.caption).foregroundStyle(.secondary)
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 12) {
+                    bracketColumn(title: "西部 · 首轮", cards: roundCards(conference: "西部", round: "首轮"))
+                    bracketColumn(title: "西部半决赛", cards: roundCards(conference: "西部", round: "分区半决赛"))
+                    bracketColumn(title: "西部决赛", cards: roundCards(conference: "西部", round: "分区决赛"))
+                    finalsColumn
+                    bracketColumn(title: "东部决赛", cards: roundCards(conference: "东部", round: "分区决赛"))
+                    bracketColumn(title: "东部半决赛", cards: roundCards(conference: "东部", round: "分区半决赛"))
+                    bracketColumn(title: "东部 · 首轮", cards: roundCards(conference: "东部", round: "首轮"))
+                }
+                .padding(.vertical, 4)
+            }
+        }
     }
 }
 
