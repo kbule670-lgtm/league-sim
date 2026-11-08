@@ -176,6 +176,33 @@ final class LeagueStore: ObservableObject {
         return success
     }
 
+    // 排序时首发/替补互移：在整张上场名单里换位，排进前 5 名的就是首发，
+    // 第 6 名起是替补；inactive 不动，轮换顺序整队重排。
+    func moveActivePlayer(in teamId: UUID, from source: IndexSet, to destination: Int) {
+        updateCurrent { league in
+            guard let teamIndex = league.teams.firstIndex(where: { $0.id == teamId }) else { return }
+            var roster = league.teams[teamIndex].roster
+            var active = roster.filter { $0.status.isActive }.sorted { $0.rotationOrder < $1.rotationOrder }
+            active.move(fromOffsets: source, toOffset: destination)
+            var order = 1
+            for (index, slot) in active.enumerated() {
+                if let idx = roster.firstIndex(where: { $0.player.id == slot.player.id }) {
+                    roster[idx].status = index < 5 ? .starter : .bench
+                    roster[idx].rotationOrder = order
+                    order += 1
+                }
+            }
+            let inactive = roster.filter { $0.status == .inactive }.sorted { $0.rotationOrder < $1.rotationOrder }
+            for slot in inactive {
+                if let idx = roster.firstIndex(where: { $0.player.id == slot.player.id }) {
+                    roster[idx].rotationOrder = order
+                    order += 1
+                }
+            }
+            league.teams[teamIndex].roster = roster
+        }
+    }
+
     // 拖动排序：把同一组（首发/替补/inactive）里的球员换位，轮换顺序整队重排
     // （首发、替补、inactive 依次编号，总评越高上场时间越长）。
     // 跨组移动不走这里：改首发/替补仍用行里的状态菜单。
