@@ -166,6 +166,11 @@ struct TeamDetailView: View {
                         }
                     }
                     Section {
+                        Button("按能力自动排首发") { store.autoUpdateLineups(for: team.id) }
+                        Text("首发按位置取总评最高的那人，其余按总评排替补；总评越高上场时间越长、球权也越多。赛季结束时全联盟都会自动排一次。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    Section {
                         Button("为本队生成虚构测试名单") { showingTestFill = true }
                             .foregroundStyle(.orange)
                         Text("测试名单是虚构占位球员（测试球员 1-13），不是真实球员，点一下会替换本队现有名单。")
@@ -259,10 +264,14 @@ private struct PlayerRow: View {
                 }
             }
             Button { store.movePlayer(in: teamId, playerId: slot.player.id, direction: -1) } label: {
-                Image(systemName: "chevron.up")
+                Image(systemName: "chevron.up").font(.title3)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }.buttonStyle(.borderless)
             Button { store.movePlayer(in: teamId, playerId: slot.player.id, direction: 1) } label: {
-                Image(systemName: "chevron.down")
+                Image(systemName: "chevron.down").font(.title3)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }.buttonStyle(.borderless)
         }
         .contentShape(Rectangle())
