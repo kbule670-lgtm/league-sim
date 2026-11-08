@@ -176,15 +176,25 @@ final class LeagueStore: ObservableObject {
         return success
     }
 
-    func movePlayer(in teamId: UUID, playerId: UUID, direction: Int) {
+    // 拖动排序：把同一组（首发/替补/inactive）里的球员换位，轮换顺序整队重排
+    // （首发、替补、inactive 依次编号，总评越高上场时间越长）。
+    // 跨组移动不走这里：改首发/替补仍用行里的状态菜单。
+    func movePlayers(in teamId: UUID, from source: IndexSet, to destination: Int, status: RosterStatus) {
         updateCurrent { league in
             guard let teamIndex = league.teams.firstIndex(where: { $0.id == teamId }) else { return }
-            var roster = league.teams[teamIndex].roster.sorted { $0.rotationOrder < $1.rotationOrder }
-            guard let index = roster.firstIndex(where: { $0.player.id == playerId }) else { return }
-            let target = index + direction
-            guard target >= 0 && target < roster.count else { return }
-            roster.swapAt(index, target)
-            for i in roster.indices { roster[i].rotationOrder = i + 1 }
+            var roster = league.teams[teamIndex].roster
+            var group = roster.filter { $0.status == status }.sorted { $0.rotationOrder < $1.rotationOrder }
+            group.move(fromOffsets: source, toOffset: destination)
+            var order = 1
+            for st in [RosterStatus.starter, .bench, .inactive] {
+                let slots = st == status ? group : roster.filter { $0.status == st }.sorted { $0.rotationOrder < $1.rotationOrder }
+                for slot in slots {
+                    if let idx = roster.firstIndex(where: { $0.player.id == slot.player.id }) {
+                        roster[idx].rotationOrder = order
+                        order += 1
+                    }
+                }
+            }
             league.teams[teamIndex].roster = roster
         }
     }
