@@ -142,6 +142,13 @@ struct TeamDetailView: View {
                     Section("球队资料") {
                         TeamEditorFields(team: team)
                     }
+                    Section("出手权") {
+                        NavigationLink("出手权分配") {
+                            ShotShareView(teamId: team.id)
+                        }
+                        Text("初始按能力值自动分配，不改就是自动；点进去可手动微调。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                     if !Validation.warnings(for: team).isEmpty {
                         Section("名单校验提醒") {
                             ForEach(Validation.warnings(for: team), id: \.self) { warning in
@@ -265,6 +272,81 @@ private struct TeamEditorFields: View {
                     var copy = team; copy.colorHex = hex; store.updateTeam(copy)
                 }
             }
+    }
+}
+
+// 出手权分配：初始按能力值自动算（总评越高出手越多），拖动可微调；不改就是自动。
+// 拖动时只改本地草稿，松手再写进存档，避免每拖一格就存一次盘。
+struct ShotShareView: View {
+    var teamId: UUID
+    @EnvironmentObject private var store: LeagueStore
+    @State private var drafts: [UUID: Double] = [:]
+
+    var body: some View {
+        if let team = store.currentLeague?.teams.first(where: { $0.id == teamId }) {
+            let active = team.activeRoster
+            let avg = active.isEmpty ? 70.0 : Double(active.map { Rating.overall(for: $0.player) }.reduce(0, +)) / Double(active.count)
+            let weights = active.map { slot in
+                drafts[slot.player.id] ?? SimulationEngine.baseShotWeight(for: slot, teamAvgRating: avg)
+            }
+            let total = weights.reduce(0, +)
+            List {
+                Section {
+                    Text("初始按能力值分配（总评越高出手越多），拖动可微调；不改就是自动。实际出手还受上场时间和手感影响。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("上场球员（按轮换顺序）") {
+                    ForEach(Array(active.enumerated()), id: \.element.id) { index, slot in
+                        let weight = weights[index]
+                        let share = total > 0 ? weight / total : 1.0 / Double(max(1, active.count))
+                        let isAuto = slot.shotWeight == nil && drafts[slot.player.id] == nil
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(slot.player.name).font(.headline)
+                                Text("总评 \(Rating.overall(for: slot.player))").font(.caption).foregroundStyle(.secondary)
+                                Spacer()
+                                Text("出手 \(Int((share * 100).rounded()))%")
+                                    .font(.subheadline).bold()
+                                if isAuto {
+                                    Text("自动").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                            HStack {
+                                Slider(value: Binding(
+                                    get: { weight },
+                                    set: { drafts[slot.player.id] = $0 }
+                                ), in: 0...500, step: 1, onEditingChanged: { editing in
+                                    if !editing {
+                                        store.setShotWeight(in: teamId, playerId: slot.player.id, weight: drafts[slot.player.id])
+                                    }
+                                }, minimumValueLabel: {
+                                    Text("0").font(.caption2)
+                                }, maximumValueLabel: {
+                                    Text("500").font(.caption2)
+                                }) {
+                                    Text("出手权")
+                                }
+                                Button("自动") {
+                                    drafts.removeValue(forKey: slot.player.id)
+                                    store.setShotWeight(in: teamId, playerId: slot.player.id, weight: nil)
+                                }
+                                .font(.caption)
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                }
+                Section {
+                    Button("全部恢复自动") {
+                        drafts.removeAll()
+                        store.resetAllShotWeights(in: teamId)
+                    }
+                }
+            }
+            .navigationTitle("出手权分配")
+        } else {
+            Text("找不到这支球队。").foregroundStyle(.secondary)
+        }
     }
 }
 
