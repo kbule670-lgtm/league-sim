@@ -477,6 +477,15 @@ enum SimulationEngine {
     // 出手权 = 总评^3 × 上场时间：总评越高、上场越久，出手越多。
         // 得分定下来后，再把每人的得分拆成两分/三分/罚球（见 decomposeShooting），
     // 保证 2*两分命中 + 3*三分命中 + 罚球命中 = 该球员得分，一分不差。
+    // 出手权基础权重：手动调过就用手动值，没调过按总评相对本队上场阵容平均总评算
+    // （总评越高出手越多，和之前自动算的口径一致）；上场时间和手感另外再乘。
+    static func baseShotWeight(for slot: RosterSlot, teamAvgRating: Double) -> Double {
+        if let manual = slot.shotWeight { return manual }
+        let overall = Double(Rating.overall(for: slot.player))
+        let relative = max(0.5, min(1.6, overall / max(1.0, teamAvgRating)))
+        return pow(relative, 3.0) * 100.0
+    }
+
     static func boxScore(home: Team, homePlaying: [RosterSlot], away: Team, awayPlaying: [RosterSlot], homeScore: Int, awayScore: Int,
                                  rng: inout SeededRandom) -> [PlayerGameStat] {
         var result: [PlayerGameStat] = []
@@ -507,9 +516,7 @@ enum SimulationEngine {
             // 不是只看绝对总评：同队里 90 分的比 70 分的多，弱队里的头牌也比强队里的角色球员多。
             let teamAvgRating = active.isEmpty ? 70.0 : Double(active.map { Rating.overall(for: $0.player) }.reduce(0, +)) / Double(active.count)
             let weights = active.enumerated().map { (index, slot) in
-                let overall = Double(Rating.overall(for: slot.player))
-                let relative = max(0.5, min(1.6, overall / max(1.0, teamAvgRating)))
-                return pow(relative, 3.0) * 100.0
+                baseShotWeight(for: slot, teamAvgRating: teamAvgRating)
                     * (Double(variedMinutes[index]) / 20.0)
                     * forms[index]
             }
