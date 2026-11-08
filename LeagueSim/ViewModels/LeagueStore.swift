@@ -272,13 +272,16 @@ final class LeagueStore: ObservableObject {
         return (result.snapshot, result.skippedTeams)
     }
 
-    // 清除历史：只清赛季快照、进行中的赛季和交易记录，球员名单和球队资料保留。
+    // 清除历史：清赛季快照、进行中的赛季、交易记录和球员的个人荣誉，球员名单和球队资料保留。
     func clearHistory() {
         updateCurrent { league in
             league.seasons = []
             league.ongoingSeason = nil
             league.tradeHistory = []
             league.nextSeasonNumber = 1
+            for ti in league.teams.indices { for si in league.teams[ti].roster.indices {
+                league.teams[ti].roster[si].player.honors = []
+            } }
         }
     }
 
@@ -530,7 +533,8 @@ final class LeagueStore: ObservableObject {
         }
         let championId = ongoing.playoffSeries.last(where: { $0.round == "总决赛" })?.winnerTeamId
         let championName = ongoing.playoffSeries.last(where: { $0.round == "总决赛" })?.winnerTeamName
-        let computed = SimulationEngine.computeAwards(regularPlayerStats: regularPlayerStats, regularTeamStats: regularTeamStats, playoffGames: ongoing.playoffGames, finalsGames: finalsGames, snapshotId: snapshotId, positionMap: positionMap, championTeamId: championId)
+        let conferenceMap = Dictionary(uniqueKeysWithValues: participants.map { ($0.id, SimulationEngine.conference(for: $0, in: participants).rawValue) })
+        let computed = SimulationEngine.computeAwards(regularPlayerStats: regularPlayerStats, regularTeamStats: regularTeamStats, playoffGames: ongoing.playoffGames, finalsGames: finalsGames, snapshotId: snapshotId, positionMap: positionMap, championTeamId: championId, conferenceMap: conferenceMap)
         let snapshot = SeasonSnapshot(id: snapshotId, seasonNumber: ongoing.seasonNumber, seed: ongoing.seed, settings: ongoing.settings, games: ongoing.playedGames, teamStats: regularTeamStats, playerStats: regularPlayerStats, playoffGames: ongoing.playoffGames, playoffSeries: ongoing.playoffSeries, championTeamId: championId, championTeamName: championName, createdAt: Date())
         var snap = snapshot
         snap.awards = computed.awards; snap.allNBAFirst = computed.first; snap.allNBASecond = computed.second; snap.allNBAThird = computed.third; snap.seasonLeaders = computed.leaders; snap.playoffPlayerStats = computed.playoffPlayerStats
@@ -541,6 +545,17 @@ final class LeagueStore: ObservableObject {
             for ti in league.teams.indices { for si in league.teams[ti].roster.indices where league.teams[ti].roster[si].player.id == pid {
                 league.teams[ti].roster[si].player.honors.append(PlayerHonor(type: award.title, seasonNumber: ongoing.seasonNumber, teamName: award.teamName, detail: award.valueText))
             } }
+        }
+        // 最佳阵容记入球员荣誉：一阵/二阵/三阵按名字 + 队名对上当前名单里的人。
+        for (tier, entries) in [("最佳一阵", computed.first), ("最佳二阵", computed.second), ("最佳三阵", computed.third)] {
+            for entry in entries {
+                for ti in league.teams.indices { for si in league.teams[ti].roster.indices where league.teams[ti].roster[si].player.name == entry.playerName && league.teams[ti].name == entry.teamName {
+                    let p = league.teams[ti].roster[si].player
+                    if !p.honors.contains(where: { $0.type == tier && $0.seasonNumber == ongoing.seasonNumber }) {
+                        league.teams[ti].roster[si].player.honors.append(PlayerHonor(type: tier, seasonNumber: ongoing.seasonNumber, teamName: entry.teamName, detail: entry.position))
+                    }
+                } }
+            }
         }
         if let cid = championId, let cname = championName {
             for ti in league.teams.indices where league.teams[ti].id == cid { for si in league.teams[ti].roster.indices {
@@ -563,7 +578,8 @@ final class LeagueStore: ObservableObject {
                 var player = league.teams[ti].roster[si].player
                 player.age += 1
                 let ppg = ppgMap[player.id] ?? 0
-                if league.settings.developmentMode == "真实" {
+                // 潜力值为 0 的球员不随年龄增长改数值：真实模式的涨/跌都跳过（年龄 +1 和退役照常）。
+                if league.settings.developmentMode == "真实" && player.attributes.potential != 0 {
                     if (23...30).contains(player.age) {
                         var gain = player.attributes.potential >= 85 ? 2 : (player.attributes.potential >= 75 ? 1 : 0)
                         if ppg >= 20 { gain += 1 }
@@ -591,12 +607,57 @@ final class LeagueStore: ObservableObject {
                 league.teams[ti].roster[si].player = player
             }
         }
+        // 赛季结束按能力自动排首发和轮换：首发按位置取总评最高，轮换按总评排，球权本来就按总评相对值算。
+        autoUpdateLineups(&league)
         if league.settings.autoTradeEnabled {
             runAutoTrades(&league, seasonNumber: seasonNumber, seed: seed)
         }
     }
 
-    // 自动交易：赛季结束尝试换队，每队 5 个位置各至少 2 人、单队 95+ 不超过 2 人才成交，最多成交 4 笔。
+    // 按能力自动排首发：每个位置取总评最高的那人当首发，其余激活球员按总评排替补；
+    // 轮换顺序按总评排（总评越高上场时间越长，球权也按总评相对值分）。
+    // 某个位置没人时，用剩余总评最高的人顶首发；退役/inactive 的人不动。
+    func autoUpdateLineups(for teamId: UUID) {
+        updateCurrent { league in
+            if let idx = league.teams.firstIndex(where: { $0.id == teamId }) {
+                autoUpdateLineupsForTeam(&league.teams[idx])
+            }
+        }
+    }
+
+    private func autoUpdateLineups(_ league: inout League) {
+        for ti in league.teams.indices { autoUpdateLineupsForTeam(&league.teams[ti]) }
+    }
+
+    private func autoUpdateLineupsForTeam(_ team: inout Team) {
+        var active = team.roster.filter { $0.status.isActive && !$0.player.isRetired }
+        guard !active.isEmpty else { return }
+        active.sort { Rating.overall(for: $0.player) > Rating.overall(for: $1.player) }
+        var starterIds: Set<UUID> = []
+        for pos in Position.allCases {
+            if let best = active.first(where: { $0.player.position == pos && !starterIds.contains($0.player.id) }) {
+                starterIds.insert(best.player.id)
+            }
+        }
+        // 位置缺人时按总评补齐 5 名首发。
+        for slot in active where starterIds.count < 5 && !starterIds.contains(slot.player.id) {
+            starterIds.insert(slot.player.id)
+        }
+        var order = 1
+        for slot in active.sorted(by: { Rating.overall(for: $0.player) > Rating.overall(for: $1.player) }) {
+            if let idx = team.roster.firstIndex(where: { $0.player.id == slot.player.id }) {
+                team.roster[idx].status = starterIds.contains(slot.player.id) ? .starter : .bench
+                team.roster[idx].rotationOrder = order
+                order += 1
+            }
+        }
+        for idx in team.roster.indices where !team.roster[idx].status.isActive || team.roster[idx].player.isRetired {
+            team.roster[idx].rotationOrder = order
+            order += 1
+        }
+    }
+
+    // 自动交易：赛季结束尝试换队，每队 5 个位置各至少 2 人、单队 95+ 不超过 2 人才成交，最多成交 8 笔。
     private func runAutoTrades(_ league: inout League, seasonNumber: Int, seed: Int64) {
         var rng = SeededRandom(seed: seed &+ Int64(seasonNumber) * 7919)
         var done = 0
@@ -611,7 +672,7 @@ final class LeagueStore: ObservableObject {
             }
             return true
         }
-        while done < 4 && attempts < 8 {
+        while done < 8 && attempts < 16 {
             attempts += 1
             guard league.teams.count >= 2 else { break }
             let a = rng.nextInt(in: 0...(league.teams.count - 1))
