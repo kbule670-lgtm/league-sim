@@ -339,6 +339,10 @@ private struct ShotShareRow: View {
     var onWeightCommit: () -> Void
     var onResetToAuto: () -> Void
 
+    private var weightBinding: Binding<Double> {
+        Binding(get: { weight }, set: { onWeightChange($0) })
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -352,18 +356,16 @@ private struct ShotShareRow: View {
                 }
             }
             HStack {
-                Slider(value: Binding(
-                    get: { weight },
-                    set: { onWeightChange($0) }
-                ), in: 0...500, step: 1, onEditingChanged: { editing in
+                // 滑条只用最简单的写法（不带 minimum/maximumValueLabel）：
+                // 带那两个参数的重载在这儿编不过（ValueLabel 推成闭包类型），
+                // 0/500 直接写成两边的文字，意思一样。
+                Text("0").font(.caption2)
+                Slider(value: weightBinding, in: 0.0...500.0, step: 1.0, onEditingChanged: { editing in
                     if !editing { onWeightCommit() }
-                }, minimumValueLabel: {
-                    Text("0").font(.caption2)
-                }, maximumValueLabel: {
-                    Text("500").font(.caption2)
                 }) {
                     Text("出手权")
                 }
+                Text("500").font(.caption2)
                 Button("自动") { onResetToAuto() }
                     .font(.caption)
                     .buttonStyle(.bordered)
