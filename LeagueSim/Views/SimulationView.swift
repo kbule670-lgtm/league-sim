@@ -24,7 +24,6 @@ struct SimulationView: View {
     @State private var foldLeaderboard = false
     @State private var foldSchedule = true
     @State private var foldSimPlayoffSeries = true
-    @State private var foldOngoingBracket = true
 
     private var league: League? { store.currentLeague }
 
@@ -195,13 +194,12 @@ struct SimulationView: View {
                 }
             }
                 Section {
-                Button { foldOngoingBracket.toggle() } label: {
-                    HStack { Text("季后赛对阵图（东西部 8 进 4、4 进 2、2 进 1、总决赛）"); Spacer(); Image(systemName: foldOngoingBracket ? "chevron.down" : "chevron.right") }
+                    NavigationLink {
+                        PlayoffBracketPage(series: ongoing.playoffSeries, championTeamName: nil)
+                    } label: {
+                        Text("季后赛对阵图（东西部 8 进 4、4 进 2、2 进 1、总决赛）")
+                    }
                 }
-                if foldOngoingBracket {
-                    PlayoffBracketView(series: ongoing.playoffSeries, championTeamName: nil)
-                }
-            }
             }
             if ongoing.playoffRound == 0 {
                 Section {
@@ -285,7 +283,6 @@ struct HistoryView: View {
     @State private var foldDivisions = false
     @State private var foldSeasonAwardsOverview = true
     @State private var foldHistoryLeaderboard = false
-    @State private var foldHistoryBracket = true
     @State private var historyLeaderScope = "总数据"
     @State private var foldTopScoring = false
     @State private var foldTradeHistory = false
@@ -533,13 +530,12 @@ struct HistoryView: View {
                             }
                         }
                         Section {
-                Button { foldHistoryBracket.toggle() } label: {
-                    HStack { Text("季后赛对阵图（东西部 8 进 4、4 进 2、2 进 1、总决赛）"); Spacer(); Image(systemName: foldHistoryBracket ? "chevron.down" : "chevron.right") }
-                }
-                if foldHistoryBracket {
-                    PlayoffBracketView(series: season.playoffSeries, championTeamName: season.championTeamName)
-                }
-            }
+                            NavigationLink {
+                                PlayoffBracketPage(series: season.playoffSeries, championTeamName: season.championTeamName)
+                            } label: {
+                                Text("季后赛对阵图（东西部 8 进 4、4 进 2、2 进 1、总决赛）")
+                            }
+                        }
                         if !season.awards.isEmpty || !season.seasonLeaders.isEmpty {
                             Section {
                 Button { foldAwards.toggle() } label: {
@@ -756,7 +752,9 @@ private struct OngoingPlayoffSeriesView: View {
 
 // 季后赛对阵图：左西部、右东部、中间总决赛；每轮一列，首轮 8 进 4、半决赛 4 进 2、
 // 分区决赛 2 进 1、总决赛 1 场定冠军。卡片写种子号 + 球队名 + 系列赛胜场，不用球队图标、不写年份。
-// 只按 series 数据画：已打的轮次显示比分，未打的轮次按上一轮胜者显示“待定”对阵。
+// 注意：这个图不要直接塞进 List 的折叠区里——横向滚动条在 List 单元格里会被裁剪、
+// 列与列叠在一起、字叠着走（就是录屏里那种诡异的样子）。所以只在单独的对阵图页里用，
+// 那里是整页的横向滚动，列宽固定、内容不压缩。
 struct PlayoffBracketView: View {
     var series: [PlayoffSeries]
     var championTeamName: String?
@@ -767,23 +765,41 @@ struct PlayoffBracketView: View {
     }
 
     private func seriesCard(_ s: PlayoffSeries) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack { Text("\(s.higherSeed)").font(.caption2).foregroundStyle(.secondary); Text(s.higherSeedTeamName).font(.caption).lineLimit(1); Spacer(); Text("\(s.higherWins)").font(.caption).bold() }
-            HStack { Text("\(s.lowerSeed)").font(.caption2).foregroundStyle(.secondary); Text(s.lowerSeedTeamName).font(.caption).lineLimit(1); Spacer(); Text("\(s.lowerWins)").font(.caption).bold() }
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Text("\(s.higherSeed)").font(.caption2).foregroundStyle(.secondary).frame(width: 14, alignment: .leading)
+                Text(s.higherSeedTeamName).font(.caption).lineLimit(1)
+                Spacer()
+                Text("\(s.higherWins)").font(.caption).bold()
+            }
+            HStack(spacing: 4) {
+                Text("\(s.lowerSeed)").font(.caption2).foregroundStyle(.secondary).frame(width: 14, alignment: .leading)
+                Text(s.lowerSeedTeamName).font(.caption).lineLimit(1)
+                Spacer()
+                Text("\(s.lowerWins)").font(.caption).bold()
+            }
         }
-        .padding(6)
-        .frame(width: 132)
+        .padding(8)
+        .frame(width: 150)
         .background(Color(.secondarySystemBackground))
         .cornerRadius(8)
     }
 
     private func pendingCard(_ teamA: String, _ teamB: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack { Text(teamA).font(.caption).lineLimit(1); Spacer(); Text("待定").font(.caption2).foregroundStyle(.secondary) }
-            HStack { Text(teamB).font(.caption).lineLimit(1); Spacer(); Text("待定").font(.caption2).foregroundStyle(.secondary) }
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Text(teamA).font(.caption).lineLimit(1)
+                Spacer()
+                Text("待定").font(.caption2).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 4) {
+                Text(teamB).font(.caption).lineLimit(1)
+                Spacer()
+                Text("待定").font(.caption2).foregroundStyle(.secondary)
+            }
         }
-        .padding(6)
-        .frame(width: 132)
+        .padding(8)
+        .frame(width: 150)
         .background(Color(.secondarySystemBackground))
         .cornerRadius(8)
     }
@@ -808,43 +824,81 @@ struct PlayoffBracketView: View {
         return cards
     }
 
+    // 一列：标题在顶，卡片在 340 高的列里上下散开，半决赛 2 张、分区决赛 1 张
+    // 自然对到首轮的对阵位置上，不会挤成一团。
     private func bracketColumn(title: String, cards: [AnyView]) -> some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 0) {
             Text(title).font(.caption).bold()
-            ForEach(Array(cards.enumerated()), id: \.offset) { _, card in card }
-            if cards.isEmpty { Text("待定").font(.caption).foregroundStyle(.secondary) }
+                .frame(height: 22)
+            VStack {
+                Spacer()
+                ForEach(Array(cards.enumerated()), id: \.offset) { _, card in
+                    card
+                    Spacer()
+                }
+            }
+            .frame(height: 340)
+            if cards.isEmpty {
+                Text("待定").font(.caption).foregroundStyle(.secondary)
+            }
         }
+        .frame(width: 150)
     }
 
     private var finalsColumn: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 0) {
             Text("总决赛").font(.caption).bold()
-            let finals = seriesList(conference: "总决赛", round: "总决赛")
-            if let f = finals.first { seriesCard(f) } else { Text("待定").font(.caption).foregroundStyle(.secondary) }
-            if let champ = championTeamName {
-                Text("总冠军").font(.caption2).foregroundStyle(.secondary)
-                Text(champ).font(.caption).bold()
+                .frame(height: 22)
+            VStack {
+                Spacer()
+                let finals = seriesList(conference: "总决赛", round: "总决赛")
+                if let f = finals.first { seriesCard(f) } else { Text("待定").font(.caption).foregroundStyle(.secondary) }
+                if let champ = championTeamName {
+                    Text("总冠军").font(.caption2).foregroundStyle(.secondary).padding(.top, 8)
+                    Text(champ).font(.caption).bold().lineLimit(1)
+                }
+                Spacer()
             }
+            .frame(height: 340)
         }
+        .frame(width: 150)
     }
 
     var body: some View {
-        if series.isEmpty {
-            Text("季后赛还没开始。").font(.caption).foregroundStyle(.secondary)
-        } else {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 12) {
-                    bracketColumn(title: "西部 · 首轮", cards: roundCards(conference: "西部", round: "首轮"))
-                    bracketColumn(title: "西部半决赛", cards: roundCards(conference: "西部", round: "分区半决赛"))
-                    bracketColumn(title: "西部决赛", cards: roundCards(conference: "西部", round: "分区决赛"))
-                    finalsColumn
-                    bracketColumn(title: "东部决赛", cards: roundCards(conference: "东部", round: "分区决赛"))
-                    bracketColumn(title: "东部半决赛", cards: roundCards(conference: "东部", round: "分区半决赛"))
-                    bracketColumn(title: "东部 · 首轮", cards: roundCards(conference: "东部", round: "首轮"))
-                }
-                .padding(.vertical, 4)
-            }
+        HStack(alignment: .top, spacing: 16) {
+            bracketColumn(title: "西部 · 首轮", cards: roundCards(conference: "西部", round: "首轮"))
+            bracketColumn(title: "西部半决赛", cards: roundCards(conference: "西部", round: "分区半决赛"))
+            bracketColumn(title: "西部决赛", cards: roundCards(conference: "西部", round: "分区决赛"))
+            finalsColumn
+            bracketColumn(title: "东部决赛", cards: roundCards(conference: "东部", round: "分区决赛"))
+            bracketColumn(title: "东部半决赛", cards: roundCards(conference: "东部", round: "分区半决赛"))
+            bracketColumn(title: "东部 · 首轮", cards: roundCards(conference: "东部", round: "首轮"))
         }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+}
+
+// 季后赛对阵图单独一页：整页横向滚动，不塞进 List 里，避免列被裁剪叠在一起。
+struct PlayoffBracketPage: View {
+    var series: [PlayoffSeries]
+    var championTeamName: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                if series.isEmpty {
+                    Text("季后赛还没开始。").foregroundStyle(.secondary)
+                } else {
+                    ScrollView(.horizontal, showsIndicators: true) {
+                        PlayoffBracketView(series: series, championTeamName: championTeamName)
+                    }
+                    Text("左右滑查看东西部对阵；总决赛在中间。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding()
+        }
+        .navigationTitle("季后赛对阵图")
     }
 }
 
