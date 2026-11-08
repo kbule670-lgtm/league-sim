@@ -332,6 +332,7 @@ struct HistoryView: View {
         case "两双": return stats.sorted { $0.doubleDoubles > $1.doubleDoubles }
         case "投篮": return stats.filter { $0.games > 0 && Double($0.totalFieldGoalsAttempted) / Double($0.games) >= 4 }.sorted { $0.fieldGoalPercentage > $1.fieldGoalPercentage }
         case "三分": return stats.filter { $0.games > 0 && Double($0.totalFieldGoalsAttempted) / Double($0.games) >= 4 }.sorted { $0.threePercentage > $1.threePercentage }
+        case "三分总个数": return stats.sorted { $0.totalThreeMade > $1.totalThreeMade }
         case "罚球": return stats.filter { $0.totalFreeThrowsAttempted >= 300 }.sorted { $0.freeThrowPercentage > $1.freeThrowPercentage }
         default: return []
         }
@@ -349,6 +350,7 @@ struct HistoryView: View {
         case "两双": return String(format: "累计 %d 次 · 出场 %d 场", stat.doubleDoubles, stat.games)
         case "投篮": return String(format: "%.1f%% · %d/%d", stat.fieldGoalPercentage * 100, stat.totalFieldGoalsMade, stat.totalFieldGoalsAttempted)
         case "三分": return String(format: "%.1f%% · %d/%d", stat.threePercentage * 100, stat.totalThreeMade, stat.totalThreeAttempted)
+        case "三分总个数": return String(format: "累计 %d 个 · 出场 %d 场", stat.totalThreeMade, stat.games)
         case "罚球": return String(format: "%.1f%% · %d/%d", stat.freeThrowPercentage * 100, stat.totalFreeThrowsMade, stat.totalFreeThrowsAttempted)
         default: return ""
         }
@@ -424,7 +426,7 @@ struct HistoryView: View {
                                 Text("总数据").tag("总数据"); Text("常规赛").tag("常规赛"); Text("季后赛").tag("季后赛")
                             }.pickerStyle(.segmented)
                             Picker("数据", selection: $historyLeaderCategory) {
-                                ForEach(["得分", "总得分", "篮板", "助攻", "抢断", "盖帽", "三双", "两双", "投篮", "三分", "罚球"], id: \.self) { Text($0) }
+                                ForEach(["得分", "总得分", "篮板", "助攻", "抢断", "盖帽", "三双", "两双", "投篮", "三分", "三分总个数", "罚球"], id: \.self) { Text($0) }
                             }
                             let aggregated = historyAggregatedStats(seasons: seasons, scope: historyLeaderScope)
                             let ranked = historyRankedStats(stats: aggregated, category: historyLeaderCategory)
@@ -438,7 +440,7 @@ struct HistoryView: View {
                                     Text(historyLeaderValueText(stat: stat, category: historyLeaderCategory)).font(.caption).foregroundStyle(.secondary)
                                 }
                             }
-                            Text("得分榜按场均排（打过 1 场就进榜），总得分、篮板、助攻、抢断、盖帽、三双、两双按累计总数排；命中率榜只统计场均出手 >= 4 次的球员，老快照投篮为 0 的不进命中率榜。范围分总数据（常规赛 + 季后赛）、常规赛、季后赛三档。").font(.caption).foregroundStyle(.secondary)
+                            Text("得分榜按场均排（打过 1 场就进榜），总得分、篮板、助攻、抢断、盖帽、三双、两双、三分总个数按累计总数排；命中率榜只统计场均出手 >= 4 次的球员，老快照投篮为 0 的不进命中率榜。范围分总数据（常规赛 + 季后赛）、常规赛、季后赛三档。").font(.caption).foregroundStyle(.secondary)
                         }
                     }
                     Section {
