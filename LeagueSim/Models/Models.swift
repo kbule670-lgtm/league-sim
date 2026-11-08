@@ -134,7 +134,7 @@ struct Player: Codable, Identifiable, Equatable {
 
 // MARK: - 名单槽位：球员 + 在队内的角色与轮换顺序
 struct RosterSlot: Codable, Equatable, Identifiable {
-    enum CodingKeys: String, CodingKey { case player, status, rotationOrder }
+    enum CodingKeys: String, CodingKey { case player, status, rotationOrder, shotWeight }
     // ForEach 直接用名单槽位时，SwiftUI 要一个稳定 id：就用球员 id，
     // 同一球员在同一队里只会出现一次，不会撞。
     var id: UUID { player.id }
@@ -142,6 +142,9 @@ struct RosterSlot: Codable, Equatable, Identifiable {
     var status: RosterStatus
     // 轮换顺序：数字越小越先上。首发 5 人默认 1-5，替补往后排。
     var rotationOrder: Int
+    // 出手权：nil = 自动（按总评相对均值算），有值 = 手动调过的权重；模拟按这个权重分出手。
+    // 默认 nil，老存档缺这个键也解成 nil，不影响打开。
+    var shotWeight: Double? = nil
 }
 
 // MARK: - 东西部
@@ -559,6 +562,7 @@ extension RosterSlot {
             status = .bench
         }
         rotationOrder = try c.decodeIfPresent(Int.self, forKey: .rotationOrder) ?? 1
+        shotWeight = try c.decodeIfPresent(Double.self, forKey: .shotWeight)
     }
 }
 
