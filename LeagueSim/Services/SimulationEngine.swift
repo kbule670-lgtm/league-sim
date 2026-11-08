@@ -531,14 +531,19 @@ enum SimulationEngine {
                 case .sg: positionReboundBonus = 0.7
                 case .pg: positionReboundBonus = 0.6
                 }
-                let rebounds = Int(((Double(player.attributes.rebounding) / 100.0) * 12.0 * positionReboundBonus
+                // 数值按排名拉开差距：不用绝对值线性算，用幂次——85 和 90 同一种数据
+                // 要有明显差别，顶级数值和普通数值的差距也更大（篮板/助攻用 1.5 次方，
+                // 抢断/盖帽用 2 次方）；抢断/盖帽数值 90 以上再乘 1.5，精英防守者场均断帽明显更多。
+                let rebounds = Int((pow(Double(player.attributes.rebounding) / 100.0, 1.5) * 13.0 * positionReboundBonus
                     * (0.5 + rng.nextDouble() * 1.0)).rounded())
-                let assists = Int(((Double(player.attributes.playmaking) / 100.0) * 9.0
+                let assists = Int((pow(Double(player.attributes.playmaking) / 100.0, 1.5) * 10.0
                     * (0.5 + rng.nextDouble() * 1.0)).rounded())
-                let steals = Int(((Double(player.attributes.perimeterDefense) / 100.0) * 2.0
-                    * rng.nextDouble()).rounded())
-                let blocks = Int(((Double(player.attributes.rimProtection) / 100.0) * 2.0
-                    * rng.nextDouble()).rounded())
+                let stealBoost = player.attributes.perimeterDefense >= 90 ? 1.5 : 1.0
+                let blockBoost = player.attributes.rimProtection >= 90 ? 1.5 : 1.0
+                let steals = Int((pow(Double(player.attributes.perimeterDefense) / 100.0, 2.0) * 3.0
+                    * stealBoost * rng.nextDouble()).rounded())
+                let blocks = Int((pow(Double(player.attributes.rimProtection) / 100.0, 2.0) * 3.0
+                    * blockBoost * rng.nextDouble()).rounded())
                 stats.append(PlayerGameStat(playerId: player.id, playerName: player.name,
                                             teamId: team.id, minutes: minutes,
                                             points: Int(rawPoints.rounded()), rebounds: rebounds,
@@ -682,6 +687,7 @@ enum SimulationEngine {
     }
 
     static func aggregatePlayerStats(games: [Game], seasonId: UUID, positionMap: [UUID: String] = [:]) -> [PlayerSeasonStat] {
+        let milestones = milestoneCounts(in: games)
         var totals: [UUID: PlayerSeasonStat] = [:]
         var teamNameMap: [UUID: String] = [:]; var teamIdMap: [UUID: UUID] = [:]; var nameMap: [UUID: String] = [:]
         for game in games {
@@ -696,7 +702,7 @@ enum SimulationEngine {
             }
         }
         return totals.values.map { stat -> PlayerSeasonStat in
-            var copy = stat; copy.seasonId = seasonId; copy.teamName = teamNameMap[stat.playerId] ?? ""; copy.teamId = teamIdMap[stat.playerId] ?? stat.teamId; copy.playerName = nameMap[stat.playerId] ?? stat.playerName; copy.position = positionMap[stat.playerId] ?? ""; return copy
+            var copy = stat; copy.seasonId = seasonId; copy.teamName = teamNameMap[stat.playerId] ?? ""; copy.teamId = teamIdMap[stat.playerId] ?? stat.teamId; copy.playerName = nameMap[stat.playerId] ?? stat.playerName; copy.position = positionMap[stat.playerId] ?? ""; copy.tripleDoubles = milestones[stat.playerId]?.triple ?? 0; copy.doubleDoubles = milestones[stat.playerId]?.double ?? 0; return copy
         }.sorted { $0.pointsPerGame > $1.pointsPerGame }
     }
 
@@ -750,7 +756,7 @@ enum SimulationEngine {
     // 奖项：得分王/篮板王/助攻王/抢断王/盖帽王按场均最高（出场至少一半，凑不够就全算）；
     // DPOY 按抢断+盖帽综合；MVP 按场均分+板+助×1.5+抢断×2+盖帽×2+球队胜场×0.15；
     // 最佳阵容按每个位置场均分排前三；FMVP 按冠军队总决赛场均分最高（败方再高也不给）。
-    static func computeAwards(regularPlayerStats: [PlayerSeasonStat], regularTeamStats: [TeamSeasonStat], playoffGames: [Game], finalsGames: [Game], snapshotId: UUID, positionMap: [UUID: String], championTeamId: UUID? = nil) -> (awards: [SeasonAward], first: [AllNBAEntry], second: [AllNBAEntry], third: [AllNBAEntry], leaders: [SeasonLeader], playoffPlayerStats: [PlayerSeasonStat], fmvpPlayerId: UUID?) {
+    static func computeAwards(regularPlayerStats: [PlayerSeasonStat], regularTeamStats: [TeamSeasonStat], playoffGames: [Game], finalsGames: [Game], snapshotId: UUID, positionMap: [UUID: String], championTeamId: UUID? = nil, conferenceMap: [UUID: String] = [:]) -> (awards: [SeasonAward], first: [AllNBAEntry], second: [AllNBAEntry], third: [AllNBAEntry], leaders: [SeasonLeader], playoffPlayerStats: [PlayerSeasonStat], fmvpPlayerId: UUID?) {
         let maxGames = regularPlayerStats.map { $0.games }.max() ?? 0
         let threshold = max(1, maxGames / 2)
         let eligible = regularPlayerStats.filter { $0.games >= threshold }
@@ -771,15 +777,23 @@ enum SimulationEngine {
         if let dpoy = pool.max(by: { ($0.stealsPerGame + $0.blocksPerGame) < ($1.stealsPerGame + $1.blocksPerGame) }) {
             awards.append(SeasonAward(title: "DPOY", playerId: dpoy.playerId, playerName: dpoy.playerName, teamName: dpoy.teamName, valueText: "场均 \(fmt(dpoy.stealsPerGame)) 断 \(fmt(dpoy.blocksPerGame)) 帽"))
         }
-        // 最佳阵容：位置按 playerStats.position，空的按联赛当前名单补（positionMap），再空按控卫。
+        // 最佳阵容分东西部两组：每个分区、每个位置按场均分取前三，分别进一/二/三阵。
+        // conferenceMap 为空（老调用）时退回整联盟一组，东西部字段留空。
         var first: [AllNBAEntry] = []; var second: [AllNBAEntry] = []; var third: [AllNBAEntry] = []
         let positions = ["PG", "SG", "SF", "PF", "C"]
         let positionNames = ["PG": "控卫", "SG": "分卫", "SF": "小前", "PF": "大前", "C": "中锋"]
-        for pos in positions {
-            let group = pool.filter { ($0.position.isEmpty ? (positionMap[$0.playerId] ?? "PG") : $0.position) == pos }.sorted { $0.pointsPerGame > $1.pointsPerGame }
-            if group.indices.contains(0) { first.append(AllNBAEntry(playerName: group[0].playerName, teamName: group[0].teamName, position: positionNames[pos] ?? pos)) }
-            if group.indices.contains(1) { second.append(AllNBAEntry(playerName: group[1].playerName, teamName: group[1].teamName, position: positionNames[pos] ?? pos)) }
-            if group.indices.contains(2) { third.append(AllNBAEntry(playerName: group[2].playerName, teamName: group[2].teamName, position: positionNames[pos] ?? pos)) }
+        let conferences = conferenceMap.isEmpty ? [""] : ["东部", "西部"]
+        for conf in conferences {
+            for pos in positions {
+                let group = pool.filter {
+                    let p = $0.position.isEmpty ? (positionMap[$0.playerId] ?? "PG") : $0.position
+                    let c = conferenceMap[$0.teamId] ?? ""
+                    return p == pos && (conf.isEmpty || c == conf)
+                }.sorted { $0.pointsPerGame > $1.pointsPerGame }
+                if group.indices.contains(0) { first.append(AllNBAEntry(playerName: group[0].playerName, teamName: group[0].teamName, position: positionNames[pos] ?? pos, conference: conf)) }
+                if group.indices.contains(1) { second.append(AllNBAEntry(playerName: group[1].playerName, teamName: group[1].teamName, position: positionNames[pos] ?? pos, conference: conf)) }
+                if group.indices.contains(2) { third.append(AllNBAEntry(playerName: group[2].playerName, teamName: group[2].teamName, position: positionNames[pos] ?? pos, conference: conf)) }
+            }
         }
         let playoffPlayerStats = aggregatePlayerStats(games: playoffGames, seasonId: snapshotId, positionMap: positionMap)
         var fmvpId: UUID? = nil
@@ -811,7 +825,8 @@ enum SimulationEngine {
         }
         if points == 0 {
             let fieldGoalsAttempted = rng.nextInt(in: 0...3)
-            let threeAttempted = min(fieldGoalsAttempted, rng.nextInt(in: 0...2))
+            // 三分数值 40 以下不出手三分。
+            let threeAttempted = attrs.threePoint < 40 ? 0 : min(fieldGoalsAttempted, rng.nextInt(in: 0...2))
             // 0 出手不能只有 1 个罚球（1 罚只能是 2+1/3+1 的加罚，得先有投篮命中）：0 出手时罚球为 0。
             let freeThrowsAttempted = fieldGoalsAttempted == 0 ? 0 : rng.nextInt(in: 0...1) * 2
             return (0, fieldGoalsAttempted, 0, threeAttempted, 0, freeThrowsAttempted)
@@ -823,15 +838,16 @@ enum SimulationEngine {
         case .outside: tendencyThreeMultiplier = 1.7
         case .balanced: tendencyThreeMultiplier = 1.0
         }
-        let threeShare = clamp((0.15 + Double(attrs.threePoint - 50) * 0.004) * tendencyThreeMultiplier, 0.05, 0.65)
-        // 三分命中率：评分越高越高，99 分约 50%，90 分约 46%，80 分约 42%，70 分约 38%。
-        let threePercentage = clamp(0.38 + Double(attrs.threePoint - 70) * 0.004
-            + (rng.nextDouble() - 0.5) * 0.10, 0.28, 0.55)
+        // 三分数值 40 以下不出手三分：三分占比直接归零。
+        let threeShare = attrs.threePoint < 40 ? 0 : clamp((0.15 + Double(attrs.threePoint - 50) * 0.004) * tendencyThreeMultiplier, 0.05, 0.65)
+        // 三分命中率：评分越高越高，99 分约 53%，90 分约 48%，80 分约 44%，70 分约 40%。
+        let threePercentage = clamp(0.40 + Double(attrs.threePoint - 70) * 0.0045
+            + (rng.nextDouble() - 0.5) * 0.10, 0.28, 0.58)
         let freeThrowPercentage = clamp(0.74 + Double(attrs.freeThrow - 70) * 0.003, 0.65, 0.94)
         let shootingAverage = Double(attrs.threePoint + attrs.midRange + attrs.finishing) / 3.0
-        // 总命中率：评分越高越高，99 分约 55%（再乘手感、封顶 62%），70 分约 46%，
-        // 目标是前 30 大于 43%、前十约 50%、前三约 58%（只统计场均出手 >= 4 次的球员）。
-        let fieldGoalPercentage = clamp((0.46 + (shootingAverage - 70.0) * 0.003) * shootingForm, 0.30, 0.62)
+        // 总命中率：评分越高越高，99 分约 58%（再乘手感、封顶 65%），70 分约 48%，
+        // 目标是前 30 大于 43%、前十约 50%、前三约 60%（只统计场均出手 >= 4 次的球员）。
+        let fieldGoalPercentage = clamp((0.48 + (shootingAverage - 70.0) * 0.0035) * shootingForm, 0.30, 0.65)
         var threeMade = Int((Double(points) * threeShare / 3.0).rounded())
         threeMade = min(max(threeMade, 0), points / 3)
         if rng.nextDouble() < 0.3 && threeMade > 0 { threeMade -= 1 }
@@ -846,7 +862,9 @@ enum SimulationEngine {
         let twoMade = (remainingAfterThree - freeThrowsMade) / 2
         let fieldGoalsMade = twoMade + threeMade
         let threeAttempted: Int
-        if threeMade == 0 {
+        if attrs.threePoint < 40 {
+            threeAttempted = 0
+        } else if threeMade == 0 {
             threeAttempted = min(rng.nextInt(in: 0...2), fieldGoalsMade)
         } else {
             threeAttempted = max(threeMade, Int((Double(threeMade) / threePercentage).rounded()))
