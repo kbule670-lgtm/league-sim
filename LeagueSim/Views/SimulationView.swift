@@ -768,6 +768,16 @@ struct PlayoffBracketView: View {
             let slot: [Int: Int] = [1: 0, 4: 1, 3: 2, 2: 3]
             return list.sorted { (slot[$0.higherSeed] ?? $0.higherSeed) < (slot[$1.higherSeed] ?? $1.higherSeed) }
         }
+        if round == "分区半决赛" {
+            // 半决赛按上下半区排，不按种子号：上半区是 1v8/4v5 的胜者，下半区是 2v7/3v6 的胜者。
+            // 爆冷时种子号就错了——比如 8 号种子赢了 1 号种子，8v4 的半决赛种子号是 4，
+            // 按种子号排会被 2v7/3v6 那场（种子号 2）挤到下面去。
+            let slot: [Int: Int] = [1: 0, 8: 0, 4: 1, 5: 1, 3: 2, 6: 2, 2: 3, 7: 3]
+            func seriesSlot(_ s: PlayoffSeries) -> Int {
+                min(slot[s.higherSeed] ?? s.higherSeed, slot[s.lowerSeed] ?? s.lowerSeed)
+            }
+            return list.sorted { seriesSlot($0) < seriesSlot($1) }
+        }
         return list.sorted { $0.higherSeed < $1.higherSeed }
     }
 
