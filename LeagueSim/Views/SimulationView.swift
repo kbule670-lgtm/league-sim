@@ -891,25 +891,32 @@ struct PlayoffBracketPage: View {
 
     var body: some View {
         GeometryReader { geo in
-            ScrollView {
+            if series.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
-                    if series.isEmpty {
-                        Text("季后赛还没开始。").foregroundStyle(.secondary)
-                    } else if geo.size.width > geo.size.height {
-                        // 横屏：整图缩放到一屏宽度，不用左右滑。
+                    Text("季后赛还没开始。").foregroundStyle(.secondary)
+                }
+                .padding()
+            } else if geo.size.width > geo.size.height {
+                // 横屏：整图缩放到一屏宽度，不用左右滑；这里只有竖向滚动，不跟横向抢手势。
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
                         let scale = min(1, (geo.size.width - 32) / bracketWidth)
                         PlayoffBracketView(series: series, championTeamName: championTeamName)
                             .scaleEffect(scale, anchor: .topLeading)
                             .frame(width: geo.size.width - 32, height: bracketHeight * scale)
                         Text("横屏一屏看完，不用左右滑。")
                             .font(.caption).foregroundStyle(.secondary)
-                    } else {
-                        ScrollView(.horizontal, showsIndicators: true) {
-                            PlayoffBracketView(series: series, championTeamName: championTeamName)
-                        }
-                        Text("把手机横过来，图能一屏看完，不用左右滑。")
-                            .font(.caption).foregroundStyle(.secondary)
                     }
+                    .padding()
+                }
+            } else {
+                // 竖屏：只留横向滚动，不再套一层竖向滚动，两个滚动抢手势会滑得发涩。
+                VStack(alignment: .leading, spacing: 12) {
+                    ScrollView(.horizontal, showsIndicators: true) {
+                        PlayoffBracketView(series: series, championTeamName: championTeamName)
+                    }
+                    Text("把手机横过来，图能一屏看完，不用左右滑。")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 .padding()
             }
