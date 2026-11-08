@@ -203,6 +203,25 @@ final class LeagueStore: ObservableObject {
         }
     }
 
+    // 出手权：设某个球员的手动权重（nil = 恢复自动，按总评算）。
+    func setShotWeight(in teamId: UUID, playerId: UUID, weight: Double?) {
+        updateCurrent { league in
+            guard let teamIndex = league.teams.firstIndex(where: { $0.id == teamId }),
+                  let slotIndex = league.teams[teamIndex].roster.firstIndex(where: { $0.player.id == playerId }) else { return }
+            league.teams[teamIndex].roster[slotIndex].shotWeight = weight
+        }
+    }
+
+    // 出手权：整队恢复自动。
+    func resetAllShotWeights(in teamId: UUID) {
+        updateCurrent { league in
+            guard let teamIndex = league.teams.firstIndex(where: { $0.id == teamId }) else { return }
+            for i in league.teams[teamIndex].roster.indices {
+                league.teams[teamIndex].roster[i].shotWeight = nil
+            }
+        }
+    }
+
     // 拖动排序：把同一组（首发/替补/inactive）里的球员换位，轮换顺序整队重排
     // （首发、替补、inactive 依次编号，总评越高上场时间越长）。
     // 跨组移动不走这里：改首发/替补仍用行里的状态菜单。
