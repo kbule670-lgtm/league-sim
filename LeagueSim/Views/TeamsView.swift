@@ -297,43 +297,22 @@ struct ShotShareView: View {
                 }
                 Section("上场球员（按轮换顺序）") {
                     ForEach(Array(active.enumerated()), id: \.element.id) { index, slot in
-                        let weight = weights[index]
-                        let share = total > 0 ? weight / total : 1.0 / Double(max(1, active.count))
-                        let isAuto = slot.shotWeight == nil && drafts[slot.player.id] == nil
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Text(slot.player.name).font(.headline)
-                                Text("总评 \(Rating.overall(for: slot.player))").font(.caption).foregroundStyle(.secondary)
-                                Spacer()
-                                Text("出手 \(Int((share * 100).rounded()))%")
-                                    .font(.subheadline).bold()
-                                if isAuto {
-                                    Text("自动").font(.caption).foregroundStyle(.secondary)
-                                }
+                        let weight: Double = weights[index]
+                        let share: Double = total > 0 ? weight / total : 1.0 / Double(max(1, active.count))
+                        let noManual: Bool = slot.shotWeight == nil
+                        let noDraft: Bool = drafts[slot.player.id] == nil
+                        ShotShareRow(
+                            slot: slot,
+                            weight: weight,
+                            share: share,
+                            isAuto: noManual && noDraft,
+                            onWeightChange: { drafts[slot.player.id] = $0 },
+                            onWeightCommit: { store.setShotWeight(in: teamId, playerId: slot.player.id, weight: drafts[slot.player.id]) },
+                            onResetToAuto: {
+                                drafts.removeValue(forKey: slot.player.id)
+                                store.setShotWeight(in: teamId, playerId: slot.player.id, weight: nil)
                             }
-                            HStack {
-                                Slider(value: Binding(
-                                    get: { weight },
-                                    set: { drafts[slot.player.id] = $0 }
-                                ), in: 0...500, step: 1, onEditingChanged: { editing in
-                                    if !editing {
-                                        store.setShotWeight(in: teamId, playerId: slot.player.id, weight: drafts[slot.player.id])
-                                    }
-                                }, minimumValueLabel: {
-                                    Text("0").font(.caption2)
-                                }, maximumValueLabel: {
-                                    Text("500").font(.caption2)
-                                }) {
-                                    Text("出手权")
-                                }
-                                Button("自动") {
-                                    drafts.removeValue(forKey: slot.player.id)
-                                    store.setShotWeight(in: teamId, playerId: slot.player.id, weight: nil)
-                                }
-                                .font(.caption)
-                                .buttonStyle(.bordered)
-                            }
-                        }
+                        )
                     }
                 }
                 Section {
@@ -346,6 +325,49 @@ struct ShotShareView: View {
             .navigationTitle("出手权分配")
         } else {
             Text("找不到这支球队。").foregroundStyle(.secondary)
+        }
+    }
+}
+
+// 出手权里的一行：单独成 struct，免得整个分配页合成一个大表达式、编译器推类型超时。
+private struct ShotShareRow: View {
+    var slot: RosterSlot
+    var weight: Double
+    var share: Double
+    var isAuto: Bool
+    var onWeightChange: (Double) -> Void
+    var onWeightCommit: () -> Void
+    var onResetToAuto: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(slot.player.name).font(.headline)
+                Text("总评 \(Rating.overall(for: slot.player))").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text("出手 \(Int((share * 100).rounded()))%")
+                    .font(.subheadline).bold()
+                if isAuto {
+                    Text("自动").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            HStack {
+                Slider(value: Binding(
+                    get: { weight },
+                    set: { onWeightChange($0) }
+                ), in: 0...500, step: 1, onEditingChanged: { editing in
+                    if !editing { onWeightCommit() }
+                }, minimumValueLabel: {
+                    Text("0").font(.caption2)
+                }, maximumValueLabel: {
+                    Text("500").font(.caption2)
+                }) {
+                    Text("出手权")
+                }
+                Button("自动") { onResetToAuto() }
+                    .font(.caption)
+                    .buttonStyle(.bordered)
+            }
         }
     }
 }
