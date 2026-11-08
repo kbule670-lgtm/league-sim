@@ -129,6 +129,7 @@ struct TeamDetailView: View {
     @EnvironmentObject private var store: LeagueStore
     @State private var showingAddPlayer = false
     @State private var showingTestFill = false
+    @State private var sorting = false
 
     private var team: Team? {
         store.currentLeague?.teams.first { $0.id == teamId }
@@ -150,19 +151,34 @@ struct TeamDetailView: View {
                                 .font(.footnote).foregroundStyle(.secondary)
                         }
                     }
+                    if sorting {
+                        Section {
+                            Text("长按行右侧的拖动把手，上下拖动排序；只在同一组里排（首发里排首发、替补里排替补），改首发/替补先点右上角“完成”，再用行里的状态菜单。")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
                     Section("首发（\(team.starters.count) / 5）") {
                         ForEach(team.starters) { slot in
                             PlayerRow(teamId: team.id, slot: slot)
+                        }
+                        .onMove { source, destination in
+                            store.movePlayers(in: team.id, from: source, to: destination, status: .starter)
                         }
                     }
                     Section("替补（\(team.bench.count) 人）") {
                         ForEach(team.bench) { slot in
                             PlayerRow(teamId: team.id, slot: slot)
                         }
+                        .onMove { source, destination in
+                            store.movePlayers(in: team.id, from: source, to: destination, status: .bench)
+                        }
                     }
                     Section("inactive（\(team.inactive.count) 人）") {
                         ForEach(team.inactive) { slot in
                             PlayerRow(teamId: team.id, slot: slot)
+                        }
+                        .onMove { source, destination in
+                            store.movePlayers(in: team.id, from: source, to: destination, status: .inactive)
                         }
                     }
                     Section {
@@ -179,8 +195,10 @@ struct TeamDetailView: View {
                 }
                 .navigationTitle(team.name)
                 .toolbar {
+                    Button(sorting ? "完成" : "排序") { sorting.toggle() }
                     Button("加球员") { showingAddPlayer = true }
                 }
+                .environment(\.editMode, sorting ? .constant(.active) : .constant(.inactive))
                 .sheet(isPresented: $showingAddPlayer) {
                     PlayerEditorView(teamId: team.id, slot: nil)
                 }
@@ -246,7 +264,10 @@ private struct PlayerRow: View {
     var teamId: UUID
     var slot: RosterSlot
     @EnvironmentObject private var store: LeagueStore
+    @Environment(\.editMode) private var editMode
     @State private var showingEditor = false
+
+    private var isSorting: Bool { editMode?.wrappedValue == .active }
 
     var body: some View {
         HStack {
@@ -256,26 +277,18 @@ private struct PlayerRow: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Menu(slot.status.rawValue) {
-                ForEach(RosterStatus.allCases) { status in
-                    Button(status.rawValue) {
-                        var copy = slot; copy.status = status; store.updatePlayer(in: teamId, slot: copy)
+            if !isSorting {
+                Menu(slot.status.rawValue) {
+                    ForEach(RosterStatus.allCases) { status in
+                        Button(status.rawValue) {
+                            var copy = slot; copy.status = status; store.updatePlayer(in: teamId, slot: copy)
+                        }
                     }
                 }
             }
-            Button { store.movePlayer(in: teamId, playerId: slot.player.id, direction: -1) } label: {
-                Image(systemName: "chevron.up").font(.title3)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }.buttonStyle(.borderless)
-            Button { store.movePlayer(in: teamId, playerId: slot.player.id, direction: 1) } label: {
-                Image(systemName: "chevron.down").font(.title3)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }.buttonStyle(.borderless)
         }
         .contentShape(Rectangle())
-        .onTapGesture { showingEditor = true }
+        .onTapGesture { if !isSorting { showingEditor = true } }
         .swipeActions {
             Button("删除", role: .destructive) {
                 store.removePlayer(in: teamId, playerId: slot.player.id)
