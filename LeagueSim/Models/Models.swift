@@ -274,7 +274,7 @@ struct TeamSeasonStat: Codable, Identifiable, Equatable {
 // MARK: - 球员赛季统计（累计 + 场均都存，界面直接取，不用现算）
 // 三元组 playerId + seasonId + teamId：赛季快照里存死，之后改名单不污染历史。
 struct PlayerSeasonStat: Codable, Identifiable, Equatable {
-    enum CodingKeys: String, CodingKey { case playerId, playerName, teamId, teamName, seasonId, games, totalPoints, totalRebounds, totalAssists, totalSteals, totalBlocks, totalMinutes, totalFieldGoalsMade, totalFieldGoalsAttempted, totalThreeMade, totalThreeAttempted, totalFreeThrowsMade, totalFreeThrowsAttempted, totalFouls, position }
+    enum CodingKeys: String, CodingKey { case playerId, playerName, teamId, teamName, seasonId, games, totalPoints, totalRebounds, totalAssists, totalSteals, totalBlocks, totalMinutes, totalFieldGoalsMade, totalFieldGoalsAttempted, totalThreeMade, totalThreeAttempted, totalFreeThrowsMade, totalFreeThrowsAttempted, totalFouls, position, tripleDoubles, doubleDoubles }
     var id: UUID { playerId }
     var playerId: UUID
     var playerName: String
@@ -296,6 +296,9 @@ struct PlayerSeasonStat: Codable, Identifiable, Equatable {
     var totalFreeThrowsMade: Int = 0
     var totalFreeThrowsAttempted: Int = 0
     var totalFouls: Int = 0
+    // 单赛季三双/两双次数（默认 0，老快照补 0）：由 aggregatePlayerStats 从单场 box 现算，三双不计入两双。
+    var tripleDoubles: Int = 0
+    var doubleDoubles: Int = 0
     var position: String = ""
     var foulsPerGame: Double { games > 0 ? Double(totalFouls) / Double(games) : 0 }
     var stealsPerGame: Double { games > 0 ? Double(totalSteals) / Double(games) : 0 }
@@ -352,6 +355,8 @@ struct AllNBAEntry: Codable, Equatable {
     var playerName: String
     var teamName: String
     var position: String
+    // 最佳阵容按东西部分两组：东部/西部，老快照没有这个键时补空。
+    var conference: String = ""
 }
 struct SeasonLeader: Codable, Equatable {
     var category: String
