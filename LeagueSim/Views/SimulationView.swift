@@ -879,24 +879,40 @@ struct PlayoffBracketView: View {
 }
 
 // 季后赛对阵图单独一页：整页横向滚动，不塞进 List 里，避免列被裁剪叠在一起。
+// 横屏看：App 本来就支持横屏，手机横过来时整图按比例缩放到一屏能看完，
+// 不用左右滑；竖屏时还是横向滚动，底下有提示让横过来。
 struct PlayoffBracketPage: View {
     var series: [PlayoffSeries]
     var championTeamName: String?
 
+    // 对阵图本身的尺寸：7 列 x 150 + 6 x 16 间距 = 1146 宽，高约 362（留 400 防“待定”行超高）。
+    private let bracketWidth: CGFloat = 1146
+    private let bracketHeight: CGFloat = 400
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                if series.isEmpty {
-                    Text("季后赛还没开始。").foregroundStyle(.secondary)
-                } else {
-                    ScrollView(.horizontal, showsIndicators: true) {
+        GeometryReader { geo in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if series.isEmpty {
+                        Text("季后赛还没开始。").foregroundStyle(.secondary)
+                    } else if geo.size.width > geo.size.height {
+                        // 横屏：整图缩放到一屏宽度，不用左右滑。
+                        let scale = min(1, (geo.size.width - 32) / bracketWidth)
                         PlayoffBracketView(series: series, championTeamName: championTeamName)
+                            .scaleEffect(scale, anchor: .topLeading)
+                            .frame(width: geo.size.width - 32, height: bracketHeight * scale)
+                        Text("横屏一屏看完，不用左右滑。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        ScrollView(.horizontal, showsIndicators: true) {
+                            PlayoffBracketView(series: series, championTeamName: championTeamName)
+                        }
+                        Text("把手机横过来，图能一屏看完，不用左右滑。")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
-                    Text("左右滑查看东西部对阵；总决赛在中间。")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
+                .padding()
             }
-            .padding()
         }
         .navigationTitle("季后赛对阵图")
     }
