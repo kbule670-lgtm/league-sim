@@ -318,11 +318,11 @@ struct HistoryView: View {
         return Array(totals.values)
     }
 
-    // 历史榜：得分按场均（累计出场至少 82 场），总得分按累计总分；
+    // 历史榜：得分按场均（打过 1 场就进榜，不用打满 82 场）；总得分按累计总分；
     // 篮板/助攻/抢断/盖帽按累计总个数（不是场均）；三双/两双按累计次数。
     private func historyRankedStats(stats: [PlayerSeasonStat], category: String) -> [PlayerSeasonStat] {
         switch category {
-        case "得分": return stats.filter { $0.games >= 82 }.sorted { $0.pointsPerGame > $1.pointsPerGame }
+        case "得分": return stats.filter { $0.games > 0 }.sorted { $0.pointsPerGame > $1.pointsPerGame }
         case "总得分": return stats.sorted { $0.totalPoints > $1.totalPoints }
         case "篮板": return stats.sorted { $0.totalRebounds > $1.totalRebounds }
         case "助攻": return stats.sorted { $0.totalAssists > $1.totalAssists }
@@ -438,7 +438,7 @@ struct HistoryView: View {
                                     Text(historyLeaderValueText(stat: stat, category: historyLeaderCategory)).font(.caption).foregroundStyle(.secondary)
                                 }
                             }
-                            Text("得分榜按场均排（累计出场至少 82 场），总得分、篮板、助攻、抢断、盖帽、三双、两双按累计总数排；命中率榜只统计场均出手 >= 4 次的球员，老快照投篮为 0 的不进命中率榜。范围分总数据（常规赛 + 季后赛）、常规赛、季后赛三档。").font(.caption).foregroundStyle(.secondary)
+                            Text("得分榜按场均排（打过 1 场就进榜），总得分、篮板、助攻、抢断、盖帽、三双、两双按累计总数排；命中率榜只统计场均出手 >= 4 次的球员，老快照投篮为 0 的不进命中率榜。范围分总数据（常规赛 + 季后赛）、常规赛、季后赛三档。").font(.caption).foregroundStyle(.secondary)
                         }
                     }
                     Section {
@@ -760,8 +760,15 @@ struct PlayoffBracketView: View {
     var championTeamName: String?
 
     private func seriesList(conference: String, round: String) -> [PlayoffSeries] {
-        series.filter { $0.conference == conference && $0.round == round }
-            .sorted { $0.higherSeed < $1.higherSeed }
+        let list = series.filter { $0.conference == conference && $0.round == round }
+        if round == "首轮" {
+            // NBA 对阵规矩：首轮从上到下是 1v8、4v5、3v6、2v7，
+            // 这样半决赛 1v8 胜者对 4v5 胜者、2v7 胜者对 3v6 胜者，卡片正好对位。
+            // 待定卡片是按上一轮胜者两两配对的，首轮顺序正了，半决赛待定对阵也跟着正。
+            let slot: [Int: Int] = [1: 0, 4: 1, 3: 2, 2: 3]
+            return list.sorted { (slot[$0.higherSeed] ?? $0.higherSeed) < (slot[$1.higherSeed] ?? $1.higherSeed) }
+        }
+        return list.sorted { $0.higherSeed < $1.higherSeed }
     }
 
     private func seriesCard(_ s: PlayoffSeries) -> some View {
