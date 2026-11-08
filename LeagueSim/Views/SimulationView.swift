@@ -903,7 +903,9 @@ struct PlayoffBracketPage: View {
                         let scale = min(1, (geo.size.width - 32) / bracketWidth)
                         PlayoffBracketView(series: series, championTeamName: championTeamName)
                             .scaleEffect(scale, anchor: .topLeading)
-                            .frame(width: geo.size.width - 32, height: bracketHeight * scale)
+                            // frame 默认居中对齐：缩放前的图宽 1146 会被居中塞进 820 的框，
+                            // 左边裁掉、右边空出来；改成 topLeading，图的左缘贴住框的左缘。
+                            .frame(width: geo.size.width - 32, height: bracketHeight * scale, alignment: .topLeading)
                         Text("横屏一屏看完，不用左右滑。")
                             .font(.caption).foregroundStyle(.secondary)
                     }
