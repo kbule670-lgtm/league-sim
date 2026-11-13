@@ -134,7 +134,7 @@ struct Player: Codable, Identifiable, Equatable {
 
 // MARK: - 名单槽位：球员 + 在队内的角色与轮换顺序
 struct RosterSlot: Codable, Equatable, Identifiable {
-    enum CodingKeys: String, CodingKey { case player, status, rotationOrder, shotWeight }
+    enum CodingKeys: String, CodingKey { case player, status, rotationOrder, shotWeight, stamina }
     // ForEach 直接用名单槽位时，SwiftUI 要一个稳定 id：就用球员 id，
     // 同一球员在同一队里只会出现一次，不会撞。
     var id: UUID { player.id }
@@ -145,6 +145,9 @@ struct RosterSlot: Codable, Equatable, Identifiable {
     // 出手权：nil = 自动（按总评相对均值算），有值 = 手动调过的权重；模拟按这个权重分出手。
     // 默认 nil，老存档缺这个键也解成 nil，不影响打开。
     var shotWeight: Double? = nil
+    // 体力值：上限 100，不可改动；新赛季初始 100，每打一场掉 0-10 点，轮休一场恢复 20 点。
+    // 体力越高场上发挥越好（进手感因子）。老存档缺这个键解成 100。
+    var stamina: Double = 100
 }
 
 // MARK: - 东西部
@@ -195,11 +198,13 @@ struct Team: Codable, Identifiable, Equatable {
 
 // MARK: - 联赛设置（每个存档独立一份）
 struct LeagueSettings: Codable, Equatable {
-    enum CodingKeys: String, CodingKey { case chemistry, coachRating, homeAdvantagePoints, randomVolatility, lastSeed, developmentMode, autoTradeEnabled }
+    enum CodingKeys: String, CodingKey { case chemistry, coachRating, homeAdvantagePoints, randomVolatility, lastSeed, developmentMode, autoTradeEnabled, autoTradeDefaultApplied }
     // 球员成长模式：“永久”= 不改能力；“真实”= 23-30 岁按潜力和赛季数据小幅上涨，35 岁起每赛季下滑。
     var developmentMode: String = "永久"
     // 自动交易开关：开启后赛季结束有概率自动换队，仍可手动交易。
-    var autoTradeEnabled: Bool = false
+    var autoTradeEnabled: Bool = true
+    // 一次性迁移标记：老存档第一次打开时把自动交易翻成开，之后用户自己关了也不会再被翻回来。
+    var autoTradeDefaultApplied: Bool = false
     // 球队评分公式里的两项，默认 70，界面可调。
     var chemistry: Int = 70
     var coachRating: Int = 70
@@ -340,6 +345,9 @@ struct PlayoffSeries: Codable, Identifiable, Equatable {
     var winnerTeamId: UUID
     var winnerTeamName: String
     var gameIds: [UUID]
+
+    // 7 局 4 胜：有一方到 4 胜才算决出；未决出时 winnerTeamId/winnerTeamName 是占位值，别当胜者用。
+    var isDecided: Bool { higherWins >= 4 || lowerWins >= 4 }
 }
 
 // MARK: - 赛季奖项与历史之王
@@ -389,6 +397,10 @@ struct OngoingSeason: Codable, Equatable, Identifiable {
     var playoffSeries: [PlayoffSeries] = []
     var playoffRound: Int = 0
     var restCounts: [String: Int] = [:]
+    // 自动交易进度：已跑过的交易窗口数（窗口在常规赛总场次 300/600/900 时开，约每队打了 20/40/60 场），
+    // 每队本赛季已交易笔数（一次互换两边各记 1 笔，每队一赛季封顶 2 笔）。
+    var tradeWindowsDone: Int = 0
+    var tradeCounts: [String: Int] = [:]
 }
 
 // MARK: - 赛季快照（赛季结束自动冻结）
@@ -563,6 +575,7 @@ extension RosterSlot {
         }
         rotationOrder = try c.decodeIfPresent(Int.self, forKey: .rotationOrder) ?? 1
         shotWeight = try c.decodeIfPresent(Double.self, forKey: .shotWeight)
+        stamina = try c.decodeIfPresent(Double.self, forKey: .stamina) ?? 100
     }
 }
 
@@ -593,7 +606,8 @@ extension LeagueSettings {
         randomVolatility = try c.decodeIfPresent(Int.self, forKey: .randomVolatility) ?? 12
         lastSeed = try c.decodeIfPresent(Int64.self, forKey: .lastSeed) ?? 1
         developmentMode = try c.decodeIfPresent(String.self, forKey: .developmentMode) ?? "永久"
-        autoTradeEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoTradeEnabled) ?? false
+        autoTradeEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoTradeEnabled) ?? true
+        autoTradeDefaultApplied = try c.decodeIfPresent(Bool.self, forKey: .autoTradeDefaultApplied) ?? false
     }
 }
 
