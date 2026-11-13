@@ -161,7 +161,7 @@ struct SimulationView: View {
                 }
                 if foldLeaderboard {
                 Picker("类别", selection: $leaderCategory) {
-                    ForEach(["得分", "总得分", "篮板", "助攻", "抢断", "盖帽", "投篮命中率", "三分命中率", "罚球命中率"], id: \.self) { Text($0) }
+                    ForEach(["得分", "总得分", "篮板", "助攻", "抢断", "盖帽", "投篮命中率", "三分命中率", "三分总个数", "罚球命中率"], id: \.self) { Text($0) }
                 }
                 Picker("常规赛 / 季后赛", selection: $leaderPlayoff) {
                     Text("常规赛").tag(false); Text("季后赛").tag(true)
@@ -242,6 +242,7 @@ struct SimulationView: View {
         case "盖帽": return stats.sorted { $0.blocksPerGame > $1.blocksPerGame }
         case "投篮命中率": return stats.filter { $0.games > 0 && Double($0.totalFieldGoalsAttempted) / Double($0.games) >= 4 }.sorted { $0.fieldGoalPercentage > $1.fieldGoalPercentage }
         case "三分命中率": return stats.filter { $0.games > 0 && Double($0.totalFieldGoalsAttempted) / Double($0.games) >= 4 }.sorted { $0.threePercentage > $1.threePercentage }
+        case "三分总个数": return stats.sorted { $0.totalThreeMade > $1.totalThreeMade }
         case "罚球命中率": return stats.filter { $0.totalFreeThrowsAttempted >= 10 }.sorted { $0.freeThrowPercentage > $1.freeThrowPercentage }
         default: return stats
         }
@@ -257,6 +258,7 @@ struct SimulationView: View {
         case "盖帽": return String(format: "场均 %.1f 帽", stat.blocksPerGame)
         case "投篮命中率": return String(format: "%.1f%%", stat.fieldGoalPercentage * 100)
         case "三分命中率": return String(format: "%.1f%%", stat.threePercentage * 100)
+        case "三分总个数": return String(format: "累计 %d 个 · 出场 %d 场", stat.totalThreeMade, stat.games)
         case "罚球命中率": return String(format: "%.1f%%", stat.freeThrowPercentage * 100)
         default: return ""
         }
@@ -572,6 +574,14 @@ struct HistoryView: View {
                                 if let king = milestoneKing(for: season, triple: false) {
                                     Text("两双王：\(king.name)（\(king.team)）\(king.count) 次").font(.caption)
                                 }
+                                let threeTop = season.playerStats.sorted { $0.totalThreeMade > $1.totalThreeMade }.prefix(30)
+                                if !threeTop.isEmpty {
+                                    Text("三分球总命中数前 30").font(.caption).bold()
+                                    ForEach(Array(threeTop.enumerated()), id: \.element.playerId) { idx, stat in
+                                        Text("\(idx + 1). \(stat.playerName)（\(stat.teamName)）：\(stat.totalThreeMade) 个 · 出场 \(stat.games) 场")
+                                            .font(.caption)
+                                    }
+                                }
                                 if season.awards.isEmpty && season.seasonLeaders.isEmpty {
                                     Text("老快照没有奖项数据，新赛季结算后这里才有。").font(.caption).foregroundStyle(.secondary)
                                 }
@@ -718,21 +728,37 @@ private func allNBAText(entries: [AllNBAEntry], title: String) -> String {
 }
 
 // 进行中赛季的季后赛系列赛详情：点进一轮，先看这轮的各场比赛比分，再点进单场看 box 与播报。
+// 点一组对决可以模拟一场、模拟单组、模拟一轮；比分从存档实时取，打完不用退出来重进。
 private struct OngoingPlayoffSeriesView: View {
+    @EnvironmentObject private var store: LeagueStore
     var series: PlayoffSeries
     var games: [Game]
     var seasonSeed: Int64
 
+    private var liveSeries: PlayoffSeries {
+        store.currentLeague?.ongoingSeason?.playoffSeries.first { $0.id == series.id } ?? series
+    }
+
     private var seriesGames: [Game] {
-        series.gameIds.compactMap { id in games.first { $0.id == id } }
+        let allGames = store.currentLeague?.ongoingSeason?.playoffGames ?? games
+        return liveSeries.gameIds.compactMap { id in allGames.first { $0.id == id } }
     }
 
     var body: some View {
         List {
-            Section("\(series.conference)\(series.round)") {
-                Text("\(series.higherSeed) 号种子 \(series.higherSeedTeamName) \(series.higherWins):\(series.lowerWins) \(series.lowerSeed) 号种子 \(series.lowerSeedTeamName)")
-                Text("胜者：\(series.winnerTeamName)")
+            Section("\(liveSeries.conference)\(liveSeries.round)") {
+                Text("\(liveSeries.higherSeed) 号种子 \(liveSeries.higherSeedTeamName) \(liveSeries.higherWins):\(liveSeries.lowerWins) \(liveSeries.lowerSeed) 号种子 \(liveSeries.lowerSeedTeamName)")
+                Text(liveSeries.isDecided ? "胜者：\(liveSeries.winnerTeamName)" : "胜者：尚未决出")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+            if !liveSeries.isDecided {
+                Section("模拟") {
+                    Button("模拟一场") { store.simulateOnePlayoffGame(seriesId: liveSeries.id) }
+                    Button("模拟单组（打到有人 4 胜）") { store.simulateOnePlayoffSeries(seriesId: liveSeries.id) }
+                    Button("模拟一轮（本轮所有组打完）") { store.simulatePlayoffRound() }
+                    Text("模拟一轮会把本轮东西部所有没打完的组都打完；分出胜负自动填进下一轮。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
             }
             Section("各场比赛（点进去看 box，里面有虚拟播报）") {
                 if seriesGames.isEmpty {
@@ -833,7 +859,8 @@ struct PlayoffBracketView: View {
         case "分区决赛": previous = "分区半决赛"
         default: return []
         }
-        let prevWinners = seriesList(conference: conference, round: previous).map { $0.winnerTeamName }
+        // 只用已决出胜负的上轮胜者画待定对阵，没决出的不画名字，整列只显示“待定”。
+        let prevWinners = seriesList(conference: conference, round: previous).filter { $0.isDecided }.map { $0.winnerTeamName }
         var cards: [AnyView] = []
         var i = 0
         while i + 1 < prevWinners.count {
