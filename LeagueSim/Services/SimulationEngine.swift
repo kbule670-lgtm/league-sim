@@ -279,7 +279,13 @@ enum SimulationEngine {
     static func simulate(league: League, seed: Int64) -> Result {
         let settings = league.settings
         var rng = SeededRandom(seed: seed)
-        let participants = league.teams.filter { $0.activeRoster.count >= 5 }
+        var participants = league.teams.filter { $0.activeRoster.count >= 5 }
+        // 一键跑完整个赛季不走逐场的体力系统：体力恒为 100，不影响比分。
+        for ti in participants.indices {
+            for si in participants[ti].roster.indices {
+                participants[ti].roster[si].stamina = 100
+            }
+        }
         let skipped = league.teams.filter { $0.activeRoster.count < 5 }
         let ratings = Dictionary(uniqueKeysWithValues: participants.map { ($0.id, teamRating(for: $0, settings: settings)) })
         let leagueAverage = participants.isEmpty ? 0 : ratings.values.reduce(0, +) / Double(participants.count)
@@ -496,19 +502,30 @@ enum SimulationEngine {
             // 同时手感也进投篮命中率（见 decomposeShooting 的 shootingForm），爆发=多得分+命中率高，打铁反之。
             // 上场时间每场微变 +-4 分钟，避免“每场都是固定时间、固定 9/21”这种一眼假的稳定。
             var forms: [Double] = []
+            var hots: [Bool] = []
             var variedMinutes: [Int] = []
             for slot in active {
                 let overall = Double(Rating.overall(for: slot.player))
                 let roll = rng.nextDouble()
+                // 手感爆棚：总评越高越容易单场爆种（85 约 4%、90 约 6%、95 约 8%、99 约 10%），
+                // 爆棚那场命中率冲到 70-75%（见 decomposeShooting 的 hotGame）。
+                let hotProb = min(0.10, max(0.01, (overall - 75.0) * 0.004))
+                let isHot = rng.nextDouble() < hotProb
+                hots.append(isHot)
                 var form: Double
-                if overall < 80 && roll < 0.08 {
+                if isHot {
+                    form = 1.50
+                } else if overall < 80 && roll < 0.08 {
                     form = 1.45
                 } else if overall >= 85 && roll < 0.08 {
                     form = 0.60
                 } else {
                     form = 0.70 + rng.nextDouble() * 0.60
                 }
-                forms.append(form)
+                // 体力进手感：满体力不影响，体力越低发挥越差（体力 50 时约降 7%，体力 0 时约降 15%）。
+                // 体力既进出手权权重（得分占比），也进投篮命中率（shootingForm 从 forms 算）。
+                let staminaFactor = 0.85 + 0.15 * (slot.stamina / 100.0)
+                forms.append(form * staminaFactor)
                 let baseMinutes = Int(minutes(for: slot, in: active).rounded())
                 variedMinutes.append(max(5, min(40, baseMinutes + rng.nextInt(in: -4...4))))
             }
@@ -576,7 +593,7 @@ enum SimulationEngine {
             for index in stats.indices {
                 let shootingForm = max(0.75, min(1.25, 0.85 + (forms[index] - 1.0) * 0.5))
                 let shooting = decomposeShooting(points: stats[index].points,
-                                                 player: players[index], shootingForm: shootingForm, rng: &rng)
+                                                 player: players[index], shootingForm: shootingForm, hotGame: hots[index], rng: &rng)
                 stats[index].fieldGoalsMade = shooting.fieldGoalsMade
                 stats[index].fieldGoalsAttempted = shooting.fieldGoalsAttempted
                 stats[index].threeMade = shooting.threeMade
@@ -593,10 +610,11 @@ enum SimulationEngine {
     // MARK: - 进行中赛季：轮休、单场、汇总、奖项（供 LeagueStore 逐场调用）
     // 轮休：常规赛每场上 10-11 人，首发一赛季轮休封顶 10 场、其他人封顶 20 场；
     // 封顶的球员必须上场，其余按“首发权重高、已轮休多的人更该上”加权抽；
-    // 季后赛上 9 人，不计轮休。
-    static func playingRoster(for team: Team, isPlayoff: Bool, restCounts: inout [String: Int], rng: inout SeededRandom) -> [RosterSlot] {
+    // 对弱队（总评差距 >= 5）额外轮休首发：差距 >= 5 休 1 个、>= 10 休 2 个、>= 15 休 3 个，优先休体力最低的。
+    // 季后赛按总评取前 9 名（不管手动排的轮换顺序），每场现算、实时更新，不再轮休。
+    static func playingRoster(for team: Team, isPlayoff: Bool, restCounts: inout [String: Int], rng: inout SeededRandom, forceRestStarters: Int = 0) -> [RosterSlot] {
         let active = team.activeRoster
-        if isPlayoff { return Array(active.prefix(9)) }
+        if isPlayoff { return Array(active.sorted { Rating.overall(for: $0.player) > Rating.overall(for: $1.player) }.prefix(9)) }
         if active.count <= 11 { return active }
         let playCount = rng.nextDouble() < 0.5 ? 10 : 11
         func cap(for slot: RosterSlot) -> Int { slot.status == .starter ? 10 : 20 }
@@ -605,6 +623,15 @@ enum SimulationEngine {
         for slot in active {
             let rests = restCounts[slot.player.id.uuidString] ?? 0
             if rests >= cap(for: slot) { mustPlay.append(slot) } else { others.append(slot) }
+        }
+        // 对弱队轮休：优先休体力最低的首发（封顶的必须上，不休）；没上场的人在后面统一记一次轮休。
+        if forceRestStarters > 0 {
+            let tiredStarters = others.filter { $0.status == .starter }
+                .sorted { $0.stamina < $1.stamina }
+                .prefix(forceRestStarters)
+            for slot in tiredStarters {
+                others.removeAll { $0.player.id == slot.player.id }
+            }
         }
         var playing = mustPlay
         var remaining = playCount - playing.count
@@ -648,33 +675,98 @@ enum SimulationEngine {
         var awayScore = score(for: awayRating, isHome: false, settings: settings, leagueAverage: leagueAverage, rng: &rng)
         if homeWins && homeScore <= awayScore { homeScore = awayScore + rng.nextInt(in: 1...8) }
         if !homeWins && awayScore <= homeScore { awayScore = homeScore + rng.nextInt(in: 1...8) }
-        let homePlaying = playingRoster(for: home, isPlayoff: isPlayoff, restCounts: &restCounts, rng: &rng)
-        let awayPlaying = playingRoster(for: away, isPlayoff: isPlayoff, restCounts: &restCounts, rng: &rng)
+        // 对弱队轮休（只常规赛）：两队总评差距 >= 5 休 1 个首发，>= 10 休 2 个，>= 15 休 3 个。
+        func weakRestCount(gap: Double) -> Int { gap >= 15 ? 3 : (gap >= 10 ? 2 : (gap >= 5 ? 1 : 0)) }
+        let homePlaying = playingRoster(for: home, isPlayoff: isPlayoff, restCounts: &restCounts, rng: &rng, forceRestStarters: isPlayoff ? 0 : weakRestCount(gap: homeRating - awayRating))
+        let awayPlaying = playingRoster(for: away, isPlayoff: isPlayoff, restCounts: &restCounts, rng: &rng, forceRestStarters: isPlayoff ? 0 : weakRestCount(gap: awayRating - homeRating))
         let box = boxScore(home: home, homePlaying: homePlaying, away: away, awayPlaying: awayPlaying, homeScore: homeScore, awayScore: awayScore, rng: &rng)
         return Game(id: UUID(), homeTeamId: home.id, homeTeamName: home.name, awayTeamId: away.id, awayTeamName: away.name, homeScore: homeScore, awayScore: awayScore, boxScore: box)
     }
 
-    static func playSeriesWithPlaying(higher: Team, higherSeed: Int, lower: Team, lowerSeed: Int, round: String, conferenceName: String, ratings: [UUID: Double], leagueAverage: Double, settings: LeagueSettings, rng: inout SeededRandom, restCounts: inout [String: Int]) -> (series: PlayoffSeries, games: [Game], winner: Team) {
-        var higherWins = 0
-        var lowerWins = 0
-        var games: [Game] = []
-        var gameIndex = 0
-        while higherWins < 4 && lowerWins < 4 && gameIndex < 7 {
-            let higherIsHome = gameIndex == 0 || gameIndex == 1 || gameIndex == 4 || gameIndex == 6
-            let home = higherIsHome ? higher : lower
-            let away = higherIsHome ? lower : higher
-            let game = playSingleGame(home: home, away: away, ratings: ratings, leagueAverage: leagueAverage, settings: settings, isPlayoff: true, restCounts: &restCounts, rng: &rng)
-            games.append(game)
-            if game.homeScore > game.awayScore {
-                if higherIsHome { higherWins += 1 } else { lowerWins += 1 }
-            } else {
-                if higherIsHome { lowerWins += 1 } else { higherWins += 1 }
-            }
-            gameIndex += 1
+    // 季后赛系列赛打一场：按 2-2-1-1-1 排主客场（第 1、2、5、7 场高种子主场），
+    // 打完更新胜场；有一方到 4 胜就定胜者。逐场 / 逐组模拟都走这里。
+    static func playOneSeriesGame(series: PlayoffSeries, higher: Team, lower: Team, ratings: [UUID: Double], leagueAverage: Double, settings: LeagueSettings, rng: inout SeededRandom, restCounts: inout [String: Int]) -> (series: PlayoffSeries, game: Game) {
+        var result = series
+        let gameIndex = series.higherWins + series.lowerWins
+        let higherIsHome = gameIndex == 0 || gameIndex == 1 || gameIndex == 4 || gameIndex == 6
+        let home = higherIsHome ? higher : lower
+        let away = higherIsHome ? lower : higher
+        let game = playSingleGame(home: home, away: away, ratings: ratings, leagueAverage: leagueAverage, settings: settings, isPlayoff: true, restCounts: &restCounts, rng: &rng)
+        if game.homeScore > game.awayScore {
+            if higherIsHome { result.higherWins += 1 } else { result.lowerWins += 1 }
+        } else {
+            if higherIsHome { result.lowerWins += 1 } else { result.higherWins += 1 }
         }
-        let winner = higherWins == 4 ? higher : lower
-        let series = PlayoffSeries(id: UUID(), round: round, conference: conferenceName, higherSeed: higherSeed, higherSeedTeamId: higher.id, higherSeedTeamName: higher.name, lowerSeed: lowerSeed, lowerSeedTeamId: lower.id, lowerSeedTeamName: lower.name, higherWins: higherWins, lowerWins: lowerWins, winnerTeamId: winner.id, winnerTeamName: winner.name, gameIds: games.map { $0.id })
+        result.gameIds.append(game.id)
+        if result.higherWins == 4 {
+            result.winnerTeamId = higher.id; result.winnerTeamName = higher.name
+        } else if result.lowerWins == 4 {
+            result.winnerTeamId = lower.id; result.winnerTeamName = lower.name
+        }
+        return (result, game)
+    }
+
+    static func playSeriesWithPlaying(higher: Team, higherSeed: Int, lower: Team, lowerSeed: Int, round: String, conferenceName: String, ratings: [UUID: Double], leagueAverage: Double, settings: LeagueSettings, rng: inout SeededRandom, restCounts: inout [String: Int]) -> (series: PlayoffSeries, games: [Game], winner: Team) {
+        var series = PlayoffSeries(id: UUID(), round: round, conference: conferenceName, higherSeed: higherSeed, higherSeedTeamId: higher.id, higherSeedTeamName: higher.name, lowerSeed: lowerSeed, lowerSeedTeamId: lower.id, lowerSeedTeamName: lower.name, higherWins: 0, lowerWins: 0, winnerTeamId: UUID(), winnerTeamName: "", gameIds: [])
+        var games: [Game] = []
+        while !series.isDecided && games.count < 7 {
+            let result = playOneSeriesGame(series: series, higher: higher, lower: lower, ratings: ratings, leagueAverage: leagueAverage, settings: settings, rng: &rng, restCounts: &restCounts)
+            series = result.series; games.append(result.game)
+        }
+        let winner = series.higherWins == 4 ? higher : lower
         return (series, games, winner)
+    }
+
+    // MARK: - 体力值（只逐场模式用；一键跑完整个赛季的 simulate() 不走这里，体力恒为 100）
+    // 全联盟耐久百分位：耐久值在全部球员里的位置，0 = 最低、1 = 最高；耐久越高，单场掉体力越少。
+    static func durabilityPercentiles(teams: [Team]) -> [UUID: Double] {
+        var counts = [Int](repeating: 0, count: 100)
+        var total = 0
+        for team in teams {
+            for slot in team.roster {
+                let d = min(99, max(0, slot.player.attributes.durability))
+                counts[d] += 1
+                total += 1
+            }
+        }
+        guard total > 0 else { return [:] }
+        var percentileByValue: [Double] = []
+        var below = 0
+        for d in 0..<100 {
+            percentileByValue.append(Double(below) / Double(total))
+            below += counts[d]
+        }
+        var result: [UUID: Double] = [:]
+        for team in teams {
+            for slot in team.roster {
+                let d = min(99, max(0, slot.player.attributes.durability))
+                result[slot.player.id] = percentileByValue[d]
+            }
+        }
+        return result
+    }
+
+    // 打完一场后更新体力：上场的人掉 0-10 点（基础 1-5 点 × 上场时间 × 耐久折扣，耐久最高那档约 ×0.7、最低约 ×1.3），
+    // 常规赛轮休的人恢复 20 点（封顶 100）；季后赛没有轮休，只掉不回。
+    static func applyStamina(for team: inout Team, game: Game, durabilityPercentile: [UUID: Double], isPlayoff: Bool, rng: inout SeededRandom) {
+        var boxMinutes: [UUID: Int] = [:]
+        for stat in game.boxScore where stat.teamId == team.id {
+            boxMinutes[stat.playerId] = stat.minutes
+        }
+        for si in team.roster.indices {
+            let slot = team.roster[si]
+            guard slot.status.isActive else { continue }
+            if let minutes = boxMinutes[slot.player.id] {
+                let base = Double(rng.nextInt(in: 1...5))
+                let usage = 0.7 + Double(minutes) / 40.0
+                let p = durabilityPercentile[slot.player.id] ?? 0.5
+                let durFactor = 1.3 - 0.6 * p
+                let drop = min(10.0, max(0.0, (base * usage * durFactor).rounded()))
+                team.roster[si].stamina = max(0, slot.stamina - drop)
+            } else if !isPlayoff {
+                team.roster[si].stamina = min(100, slot.stamina + 20)
+            }
+        }
     }
 
     static func aggregateTeamStats(games: [Game], participants: [Team]) -> [TeamSeasonStat] {
@@ -823,7 +915,7 @@ enum SimulationEngine {
     // 总出手 - 三分出手 >= 两分命中（即两分出手够分两分命中）。
     // 0 分球员也可能有出手（投丢了），命中全是 0。
     private static func decomposeShooting(points: Int, player: Player, shootingForm: Double = 1.0,
-                                          rng: inout SeededRandom)
+                                          hotGame: Bool = false, rng: inout SeededRandom)
     -> (fieldGoalsMade: Int, fieldGoalsAttempted: Int, threeMade: Int,
         threeAttempted: Int, freeThrowsMade: Int, freeThrowsAttempted: Int) {
         let attrs = player.attributes
@@ -850,18 +942,24 @@ enum SimulationEngine {
         // 三分命中率：评分越高越高，99 分约 53%，90 分约 48%，80 分约 44%，70 分约 40%。
         let threePercentage = clamp(0.40 + Double(attrs.threePoint - 70) * 0.0045
             + (rng.nextDouble() - 0.5) * 0.10, 0.28, 0.58)
-        let freeThrowPercentage = clamp(0.74 + Double(attrs.freeThrow - 70) * 0.003, 0.65, 0.94)
+        // 罚球命中率：罚球值越高越高，95 约 85%、99 约 87%，70 约 70%。
+        let freeThrowPercentage = clamp(0.70 + Double(attrs.freeThrow - 70) * 0.006, 0.60, 0.95)
         let shootingAverage = Double(attrs.threePoint + attrs.midRange + attrs.finishing) / 3.0
         // 总命中率：评分越高越高，99 分约 58%（再乘手感、封顶 65%），70 分约 48%，
         // 目标是前 30 大于 43%、前十约 50%、前三约 60%（只统计场均出手 >= 4 次的球员）。
-        let fieldGoalPercentage = clamp((0.48 + (shootingAverage - 70.0) * 0.0035) * shootingForm, 0.30, 0.65)
+        // 总命中率：平时封顶 65%；手感爆棚那场直接给 70-75%。
+        let fieldGoalPercentage = hotGame
+            ? clamp(0.70 + rng.nextDouble() * 0.05, 0.70, 0.75)
+            : clamp((0.48 + (shootingAverage - 70.0) * 0.0035) * shootingForm, 0.30, 0.65)
         var threeMade = Int((Double(points) * threeShare / 3.0).rounded())
         threeMade = min(max(threeMade, 0), points / 3)
         if rng.nextDouble() < 0.3 && threeMade > 0 { threeMade -= 1 }
         else if rng.nextDouble() < 0.3 && threeMade < points / 3 { threeMade += 1 }
         let remainingAfterThree = points - threeMade * 3
-        var freeThrowsMade = Int((Double(remainingAfterThree)
-            * (0.12 + Double(attrs.freeThrow - 70) * 0.001)).rounded())
+        // 罚球占比：罚球值越高罚球越多（95+ 时罚球约占得分一半），25-30 分的 95+ 球员场均约 10-15 罚；
+        // 罚球多了两分出手相应变少，总分不变。
+        let freeThrowShare = clamp(0.08 + Double(attrs.freeThrow - 70) * 0.016, 0.08, 0.55)
+        var freeThrowsMade = Int((Double(remainingAfterThree) * freeThrowShare).rounded())
         freeThrowsMade = min(max(freeThrowsMade, 0), remainingAfterThree)
         if (remainingAfterThree - freeThrowsMade) % 2 != 0 {
             if freeThrowsMade < remainingAfterThree { freeThrowsMade += 1 } else { freeThrowsMade -= 1 }
