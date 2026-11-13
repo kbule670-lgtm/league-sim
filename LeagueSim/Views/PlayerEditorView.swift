@@ -80,6 +80,18 @@ struct PlayerEditorView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let slot {
+                    Section("体力") {
+                        HStack {
+                            Text("体力")
+                            Spacer()
+                            Text("\(Int(slot.stamina)) / 100").bold()
+                        }
+                        ProgressView(value: slot.stamina, total: 100)
+                        Text("体力上限 100，不可改动；新赛季回满 100。打一场掉 0-10 点，轮休一场恢复 20 点；体力越高，场上发挥和命中率越高。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                if let slot {
                     Section("各赛季历史数据") {
                         NavigationLink {
                             PlayerHistoryView(playerId: slot.player.id, playerName: slot.player.name)
@@ -154,8 +166,10 @@ struct PlayerEditorView: View {
                             honors: slot?.player.honors ?? [], tendency: tendency,
                             isRetired: slot?.player.isRetired ?? false)
         if let slot {
+            // 编辑保存只改球员资料与名单状态，出手权和体力原样带上，别一保存就清掉。
             store.updatePlayer(in: teamId, slot: RosterSlot(player: player, status: status,
-                                                             rotationOrder: slot.rotationOrder))
+                                                             rotationOrder: slot.rotationOrder,
+                                                             shotWeight: slot.shotWeight, stamina: slot.stamina))
         } else {
             store.addPlayer(to: teamId, player: player, status: status)
         }
