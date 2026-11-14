@@ -343,18 +343,16 @@ enum SimulationEngine {
         }
 
         let snapshotId = UUID()
-        // 常规赛排名：胜场、净胜分、总得分，最后一项按联赛顺序，保证平局也不乱序。
+        // 常规赛排名：胜场差（胜 - 负）、胜场，最后一项按联赛顺序，保证平局也不乱序。
+        // 不用净胜分排：19 胜 10 负（胜场差 +9）就该排在 20 胜 21 负（胜场差 -1）前面。
         func sortedStandings(_ teams: [Team]) -> [Team] {
             teams.sorted {
+                let leftDiff = (teamWins[$0.id] ?? 0) - (teamLosses[$0.id] ?? 0)
+                let rightDiff = (teamWins[$1.id] ?? 0) - (teamLosses[$1.id] ?? 0)
+                if leftDiff != rightDiff { return leftDiff > rightDiff }
                 let leftWins = teamWins[$0.id] ?? 0
                 let rightWins = teamWins[$1.id] ?? 0
                 if leftWins != rightWins { return leftWins > rightWins }
-                let leftDiff = (teamPointsFor[$0.id] ?? 0) - (teamPointsAgainst[$0.id] ?? 0)
-                let rightDiff = (teamPointsFor[$1.id] ?? 0) - (teamPointsAgainst[$1.id] ?? 0)
-                if leftDiff != rightDiff { return leftDiff > rightDiff }
-                let leftFor = teamPointsFor[$0.id] ?? 0
-                let rightFor = teamPointsFor[$1.id] ?? 0
-                if leftFor != rightFor { return leftFor > rightFor }
                 return (orderIndex[$0.id] ?? 0) < (orderIndex[$1.id] ?? 0)
             }
         }
@@ -363,7 +361,7 @@ enum SimulationEngine {
                            conference: conference(for: team, in: participants).rawValue,
                            wins: teamWins[team.id] ?? 0, losses: teamLosses[team.id] ?? 0,
                            pointsFor: teamPointsFor[team.id] ?? 0, pointsAgainst: teamPointsAgainst[team.id] ?? 0)
-        }.sorted { ($0.wins, $0.pointDiff) > ($1.wins, $1.pointDiff) }
+        }.sorted { (($0.wins - $0.losses), $0.wins) > (($1.wins - $1.losses), $1.wins) }
         let playerStats = playerTotals.values.map { stat -> PlayerSeasonStat in
             var copy = stat
             copy.seasonId = snapshotId
@@ -431,12 +429,13 @@ enum SimulationEngine {
             }
             let eastChampion = conferencePlayoffs(standings: eastStandings, conferenceName: "东部")
             let westChampion = conferencePlayoffs(standings: westStandings, conferenceName: "西部")
-            // 总决赛：常规赛战绩更好的一方拿主场（胜场、净胜分，东部先作最后平局）。
+            // 总决赛：常规赛战绩更好的一方拿主场（胜场差、胜场，东部先作最后平局）。
             let eastWins = teamWins[eastChampion.id] ?? 0
             let westWins = teamWins[westChampion.id] ?? 0
-            let eastDiff = (teamPointsFor[eastChampion.id] ?? 0) - (teamPointsAgainst[eastChampion.id] ?? 0)
-            let westDiff = (teamPointsFor[westChampion.id] ?? 0) - (teamPointsAgainst[westChampion.id] ?? 0)
-            let eastIsHigher = eastWins > westWins || (eastWins == westWins && eastDiff >= westDiff)
+            let eastLosses = teamLosses[eastChampion.id] ?? 0
+            let westLosses = teamLosses[westChampion.id] ?? 0
+            let eastIsHigher = (eastWins - eastLosses) > (westWins - westLosses)
+                || ((eastWins - eastLosses) == (westWins - westLosses) && eastWins >= westWins)
             let finalsHigher = eastIsHigher ? eastChampion : westChampion
             let finalsLower = eastIsHigher ? westChampion : eastChampion
             let finalsHigherSeed = eastIsHigher
@@ -805,16 +804,33 @@ enum SimulationEngine {
         }.sorted { $0.pointsPerGame > $1.pointsPerGame }
     }
 
+    // 常规赛排名：胜场差（胜 - 负）、胜场，再按联赛顺序；不用净胜分排。
     static func sortedStandings(participants: [Team], teamStats: [TeamSeasonStat]) -> [Team] {
         let statMap = Dictionary(uniqueKeysWithValues: teamStats.map { ($0.teamId, $0) })
         let order = Dictionary(uniqueKeysWithValues: participants.enumerated().map { ($1.id, $0) })
         return participants.sorted {
             let l = statMap[$0.id]; let r = statMap[$1.id]
+            let lDiff = (l?.wins ?? 0) - (l?.losses ?? 0)
+            let rDiff = (r?.wins ?? 0) - (r?.losses ?? 0)
+            if lDiff != rDiff { return lDiff > rDiff }
             if (l?.wins ?? 0) != (r?.wins ?? 0) { return (l?.wins ?? 0) > (r?.wins ?? 0) }
-            if (l?.pointDiff ?? 0) != (r?.pointDiff ?? 0) { return (l?.pointDiff ?? 0) > (r?.pointDiff ?? 0) }
-            if (l?.pointsFor ?? 0) != (r?.pointsFor ?? 0) { return (l?.pointsFor ?? 0) > (r?.pointsFor ?? 0) }
             return (order[$0.id] ?? 0) < (order[$1.id] ?? 0)
         }
+    }
+
+    // 当前连胜 / 连败：按比赛顺序从后往前数，胜就是连胜、负就是连败；一场没打返回 nil。
+    static func currentStreak(for teamId: UUID, in games: [Game]) -> String? {
+        var count = 0
+        var won: Bool?
+        for game in games.reversed() {
+            guard game.homeTeamId == teamId || game.awayTeamId == teamId else { continue }
+            let isWin = (game.homeTeamId == teamId) ? game.homeScore > game.awayScore : game.awayScore > game.homeScore
+            if won == nil { won = isWin; count = 1 }
+            else if won == isWin { count += 1 }
+            else { break }
+        }
+        guard let won, count > 0 else { return nil }
+        return won ? "\(count)连胜" : "\(count)连败"
     }
 
     static func playoffRoundName(_ round: Int) -> String {
