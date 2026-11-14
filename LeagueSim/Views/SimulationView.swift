@@ -21,6 +21,7 @@ struct SimulationView: View {
     @State private var leaderCategory = "得分"
     @State private var leaderPlayoff = false
     @State private var foldSimStandings = true
+    @State private var scheduleFilter = ""
     @State private var foldLeaderboard = false
     @State private var foldSchedule = true
     @State private var foldSimPlayoffSeries = true
@@ -141,7 +142,7 @@ struct SimulationView: View {
             }
             Section {
                 Button { foldSimStandings.toggle() } label: {
-                    HStack { Text("排名（常规赛，按已打场次算）"); Spacer(); Image(systemName: foldSimStandings ? "chevron.down" : "chevron.right") }
+                    HStack { Text("排名（常规赛，按胜场差排）"); Spacer(); Image(systemName: foldSimStandings ? "chevron.down" : "chevron.right") }
                 }
                 if foldSimStandings {
                 ForEach(["东部", "西部"], id: \.self) { conf in
@@ -149,7 +150,8 @@ struct SimulationView: View {
                     let confTeams = standings.filter { SimulationEngine.conference(for: $0, in: participants).rawValue == conf }
                     ForEach(Array(confTeams.enumerated()), id: \.element.id) { idx, team in
                         let stat = teamStats.first { $0.teamId == team.id }
-                        Text("\(idx + 1). \(team.name)：\(stat?.wins ?? 0) 胜 \(stat?.losses ?? 0) 负 · 净胜 \(stat?.pointDiff ?? 0)")
+                        let streak = SimulationEngine.currentStreak(for: team.id, in: ongoing.playedGames).map { " · \($0)" } ?? ""
+                        Text("\(idx + 1). \(team.name)：\(stat?.wins ?? 0) 胜 \(stat?.losses ?? 0) 负\(streak)")
                             .font(.caption)
                     }
                 }
@@ -207,7 +209,20 @@ struct SimulationView: View {
                     HStack { Text("常规赛对战表（点未打的场选怎么打，已打的点进看 box）"); Spacer(); Image(systemName: foldSchedule ? "chevron.down" : "chevron.right") }
                 }
                 if foldSchedule {
-                    ForEach(ongoing.schedule) { scheduled in
+                    TextField("筛选球队（输入队名，只看这支球队的场次）", text: $scheduleFilter)
+                        .textFieldStyle(.roundedBorder)
+                        .autocorrectionDisabled(true)
+                    if !scheduleFilter.isEmpty {
+                        Button("清除筛选") { scheduleFilter = "" }
+                    }
+                    let scheduleQuery = scheduleFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let shownSchedule = ongoing.schedule.filter { scheduled in
+                        guard !scheduleQuery.isEmpty else { return true }
+                        let home = league.teams.first { $0.id == scheduled.homeTeamId }?.name ?? ""
+                        let away = league.teams.first { $0.id == scheduled.awayTeamId }?.name ?? ""
+                        return home.contains(scheduleQuery) || away.contains(scheduleQuery)
+                    }
+                    ForEach(shownSchedule) { scheduled in
                         let home = league.teams.first { $0.id == scheduled.homeTeamId }
                         let away = league.teams.first { $0.id == scheduled.awayTeamId }
                         if let gameId = scheduled.playedGameId, let game = ongoing.playedGames.first(where: { $0.id == gameId }) {
@@ -478,14 +493,15 @@ struct HistoryView: View {
                     if let season = selected {
                         Section {
                 Button { foldStandings.toggle() } label: {
-                    HStack { Text("球队战绩（常规赛胜场、净胜分排序）"); Spacer(); Image(systemName: foldStandings ? "chevron.down" : "chevron.right") }
+                    HStack { Text("球队战绩（常规赛胜场差排序）"); Spacer(); Image(systemName: foldStandings ? "chevron.down" : "chevron.right") }
                 }
                 if foldStandings {
-                            ForEach(season.teamStats.sorted { ($0.wins, $0.pointDiff, $0.pointsFor) > ($1.wins, $1.pointDiff, $1.pointsFor) }) { stat in
+                            ForEach(season.teamStats.sorted { (($0.wins - $0.losses), $0.wins) > (($1.wins - $1.losses), $1.wins) }) { stat in
                                 HStack {
                                     Text(stat.teamName)
                                     Spacer()
-                                    Text("\(stat.wins) 胜 \(stat.losses) 负 · 净胜 \(stat.pointDiff)")
+                                    let streak = SimulationEngine.currentStreak(for: stat.teamId, in: season.games).map { " · \($0)" } ?? ""
+                                    Text("\(stat.wins) 胜 \(stat.losses) 负\(streak)")
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
                             }
@@ -499,7 +515,7 @@ struct HistoryView: View {
                 if foldEastWest {
                                 ForEach(["东部", "西部"], id: \.self) { conference in
                                     Text(conference).font(.headline)
-                                    ForEach(season.teamStats.filter { $0.conference == conference }.sorted { ($0.wins, $0.pointDiff, $0.pointsFor) > ($1.wins, $1.pointDiff, $1.pointsFor) }) { stat in
+                                    ForEach(season.teamStats.filter { $0.conference == conference }.sorted { (($0.wins - $0.losses), $0.wins) > (($1.wins - $1.losses), $1.wins) }) { stat in
                                         Text("\(stat.teamName)：\(stat.wins) 胜 \(stat.losses) 负")
                                             .font(.caption)
                                     }
@@ -598,7 +614,7 @@ struct HistoryView: View {
                             }
                             ForEach(divisions.keys.sorted(), id: \.self) { division in
                                 Text(division).font(.headline)
-                                ForEach((divisions[division] ?? []).sorted { ($0.wins, $0.pointDiff, $0.pointsFor) > ($1.wins, $1.pointDiff, $1.pointsFor) }) { stat in
+                                ForEach((divisions[division] ?? []).sorted { (($0.wins - $0.losses), $0.wins) > (($1.wins - $1.losses), $1.wins) }) { stat in
                                     Text("\(stat.teamName)：\(stat.wins) 胜 \(stat.losses) 负")
                                         .font(.caption)
                                 }
