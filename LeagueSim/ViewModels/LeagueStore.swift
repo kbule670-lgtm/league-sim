@@ -108,12 +108,35 @@ final class LeagueStore: ObservableObject {
         refreshArchives()
     }
 
+    // 磁盘写放后台串行队列 + 防抖：主线程只改内存状态，存盘不卡界面；
+    // 连续操作（比如自动播放每 0.3 秒一场）只写最后一次；但最多拖 5 秒，
+    // 长时间自动播放也会定期落盘，崩了也不至于丢一整段。
+    // 注意：切存档 / 回列表时调的 save 也是走这里——写的是快照值、按存档 ID 落盘，
+    // 切走之后后台照样写对文件，不会丢也不会串。
+    private let saveQueue = DispatchQueue(label: "com.kabule.leaguesim.save", qos: .utility)
+    private var pendingSave: DispatchWorkItem?
+    private var pendingSaveSince: Date?
+
     // MARK: 当前联赛修改后保存
     func save(_ league: League? = nil) {
         guard var value = league ?? currentLeague else { return }
         value.updatedAt = Date()
         if league == nil { currentLeague = value }
-        lastSaveOK = ArchiveStore.saveLeague(value)
+        if pendingSaveSince == nil { pendingSaveSince = Date() }
+        pendingSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            let ok = ArchiveStore.saveLeague(value)
+            DispatchQueue.main.async {
+                self?.lastSaveOK = ok
+                self?.pendingSaveSince = nil
+            }
+        }
+        pendingSave = work
+        // 连续操作只写最后一次（防抖 0.5 秒）；但最多拖 5 秒，长时间自动播放也会定期落盘。
+        let staleness = Date().timeIntervalSince(pendingSaveSince ?? Date())
+        let delay: TimeInterval = staleness > 5 ? 0 : 0.5
+        if delay == 0 { pendingSaveSince = nil }
+        saveQueue.asyncAfter(deadline: .now() + delay, execute: work)
         refreshArchives()
     }
 
