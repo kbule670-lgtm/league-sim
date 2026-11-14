@@ -397,10 +397,12 @@ struct OngoingSeason: Codable, Equatable, Identifiable {
     var playoffSeries: [PlayoffSeries] = []
     var playoffRound: Int = 0
     var restCounts: [String: Int] = [:]
-    // 自动交易进度：已跑过的交易窗口数（窗口在常规赛总场次 300/600/900 时开，约每队打了 20/40/60 场），
-    // 每队本赛季已交易笔数（一次互换两边各记 1 笔，每队一赛季封顶 2 笔）。
+    // 自动交易进度：已跑过的交易窗口数（窗口在常规赛总场次 200/400/600/800/1000 时开），
+    // 每队本赛季已交易笔数（一次互换两边各记 1 笔，每队一赛季封顶 2 笔），
+    // 本赛季已经交易过的球员（交易过一次就不再交易，别让同一个人被来回倒手）。
     var tradeWindowsDone: Int = 0
     var tradeCounts: [String: Int] = [:]
+    var tradedPlayerIds: Set<UUID> = []
 }
 
 // MARK: - 赛季快照（赛季结束自动冻结）
