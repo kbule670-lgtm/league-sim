@@ -4,7 +4,7 @@ import Foundation
 // 每个存档一个独立目录：Documents/LeagueSim/Archives/<存档ID>/league.json + meta.json
 // 存档之间不共享任何数据；球员 ID 只在同存档内有意义。
 // 切换存档必须先保存当前存档再加载另一个（LeagueStore.enterArchive 里保证顺序）。
-// 本文件没有任何 URLSession / 网络请求 / 云同步代码——P0 飞行模式下全部可用。
+// 本文件没有任何 URLSession / 网络请求 / 云同步代码，飞行模式下全部可用。
 enum ArchiveStore {
     private static var baseURL: URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -20,10 +20,7 @@ enum ArchiveStore {
         baseURL.appendingPathComponent(id.uuidString, isDirectory: true)
     }
 
-    // 关键修复：保存时日期用 iso8601 编码，读取时必须用同样的 iso8601 解码。
-    // 之前读取用默认解码器（期望数字时间戳），读 iso8601 字符串会失败，
-    // 导致存档文件其实已写进 Documents，但列表读回时全部跳过、显示 0 个，
-    // 新建看起来像“弄不了”，切换存档也会读不到联赛。
+    // 日期：保存和读取都用 iso8601 编码/解码。
     private static func decoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -55,7 +52,7 @@ enum ArchiveStore {
         return nil
     }
 
-    // 进存档失败不再静默：返回具体解码错误，界面直接弹出来，免得“点了没反应”。
+    // 进存档失败返回具体解码错误，界面直接弹出来。
     // 容错顺序：先标准 iso8601，再带毫秒的 iso8601，最后默认时间戳解码；
     // 老存档不管是哪种日期写法，只要 JSON 结构对得上都能读回来。
     static func loadLeagueResult(id: UUID) -> Result<League, Error> {
@@ -96,7 +93,9 @@ enum ArchiveStore {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            // 存档文件只给 App 自己读：不用 prettyPrinted / sortedKeys，体积小一半、编码快得多；
+            // 老的 prettyPrinted 文件照样能读（解码不认格式）。
+            encoder.outputFormatting = []
             let leagueData = try encoder.encode(league)
             try leagueData.write(to: dir.appendingPathComponent("league.json", isDirectory: false),
                                  options: .atomic)
