@@ -694,13 +694,16 @@ final class LeagueStore: ObservableObject {
            ongoing.playoffSeries.filter({ $0.round == "总决赛" }).isEmpty,
            let eastChampion = team(for: eastFinal.winnerTeamId),
            let westChampion = team(for: westFinal.winnerTeamId) {
-            let eastWins = regularStats.first(where: { $0.teamId == eastChampion.id })?.wins ?? 0
-            let westWins = regularStats.first(where: { $0.teamId == westChampion.id })?.wins ?? 0
-            let eastDiff = regularStats.first(where: { $0.teamId == eastChampion.id })?.pointDiff ?? 0
-            let westDiff = regularStats.first(where: { $0.teamId == westChampion.id })?.pointDiff ?? 0
+            let eastStat = regularStats.first(where: { $0.teamId == eastChampion.id })
+            let westStat = regularStats.first(where: { $0.teamId == westChampion.id })
+            let eastWins = eastStat?.wins ?? 0
+            let westWins = westStat?.wins ?? 0
+            let eastLosses = eastStat?.losses ?? 0
+            let westLosses = westStat?.losses ?? 0
             let eastStandings = standings(for: "东部")
             let westStandings = standings(for: "西部")
-            let eastIsHigher = eastWins > westWins || (eastWins == westWins && eastDiff >= westDiff)
+            let eastIsHigher = (eastWins - eastLosses) > (westWins - westLosses)
+                || ((eastWins - eastLosses) == (westWins - westLosses) && eastWins >= westWins)
             let higher = eastIsHigher ? eastChampion : westChampion
             let lower = eastIsHigher ? westChampion : eastChampion
             let higherSeed = eastIsHigher ? seedOf(eastChampion, in: eastStandings) : seedOf(westChampion, in: westStandings)
@@ -870,9 +873,14 @@ final class LeagueStore: ObservableObject {
     // 自动交易（常规赛进行中）：总场次到 300/600/900 时开一个窗口（约每队打了 20/40/60 场），
     // 每队每赛季 1-2 笔；一次互换两边各记 1 笔。交易双方总评差距 <= 8，以补强为目的：
     // 用本队最弱首发，换对方同位置总评高 1-8 的球员；位置人数与 95+ 人数上限不变。
+    // 自动交易（赛季内分批）：窗口在常规赛总场次 200/400/600/800/1000 时开（约每队打了 13/27/40/53/67 场），
+    // 每队每赛季 1-2 笔（封顶 2 笔），以补强为目的，交易双方总评差距不超过 8。
+    // 三条规矩：① 本赛季交易过一次的球员不再交易（别让同一个人被来回倒手）；
+    // ② 每次先让还没交易过的队挑（交易次数少的优先），再随机；③ 买家先随机挑队、再随机挑人，
+    // 别总盯着同一个人、也别让有最多可选球员的队被挑中的概率天然就高。
     private func maybeRunMidSeasonTrades(league: inout League, ongoing: inout OngoingSeason) {
         guard ongoing.settings.autoTradeEnabled else { return }
-        let windows = [300, 600, 900]
+        let windows = [200, 400, 600, 800, 1000]
         guard ongoing.tradeWindowsDone < windows.count,
               ongoing.playedGames.count >= windows[ongoing.tradeWindowsDone] else { return }
         ongoing.tradeWindowsDone += 1
@@ -887,47 +895,73 @@ final class LeagueStore: ObservableObject {
             }
             return true
         }
-        // 随机顺序过一遍还没满 2 笔的队，每队最多谈成 1 笔。
+        // 卖家顺序：先打乱，再按本赛季已交易笔数从少到多排（sort 是稳定的，同笔数的随机顺序不变），
+        // 没交易过的队先挑，谈成 1 笔的队再挑，谈满 2 笔的队跳过。
         var order = Array(league.teams.indices)
         for i in stride(from: order.count - 1, through: 1, by: -1) {
             order.swapAt(i, rng.nextInt(in: 0...i))
         }
+        order.sort { (ongoing.tradeCounts[league.teams[$0].id.uuidString] ?? 0) < (ongoing.tradeCounts[league.teams[$1].id.uuidString] ?? 0) }
         for a in order {
             let aKey = league.teams[a].id.uuidString
             guard (ongoing.tradeCounts[aKey] ?? 0) < 2 else { continue }
-            let aStarters = league.teams[a].roster.indices.filter { league.teams[a].roster[$0].status == .starter && !league.teams[a].roster[$0].player.isRetired }
-            guard let ai = aStarters.min(by: { Rating.overall(for: league.teams[a].roster[$0].player) < Rating.overall(for: league.teams[a].roster[$1].player) }) else { continue }
-            let slotA = league.teams[a].roster[ai]
-            let ratingA = Rating.overall(for: slotA.player)
-            var candidates: [(b: Int, bi: Int, bCount: Int)] = []
-            for b in league.teams.indices where b != a {
-                let bCount = ongoing.tradeCounts[league.teams[b].id.uuidString] ?? 0
-                for bi in league.teams[b].roster.indices {
-                    let slotB = league.teams[b].roster[bi]
-                    guard slotB.status.isActive, !slotB.player.isRetired,
-                          slotB.player.position == slotA.player.position else { continue }
-                    let ratingB = Rating.overall(for: slotB.player)
-                    guard ratingB > ratingA && ratingB - ratingA <= 8 else { continue }
-                    candidates.append((b, bi, bCount))
+            // 卖家：按总评从低到高试首发（本赛季交易过的跳过），第一个能找到买家的就谈；
+            // 最弱首发没人要就试次弱的，别让一支队整个赛季一笔都谈不成。
+            let aStarters = league.teams[a].roster.indices
+                .filter { league.teams[a].roster[$0].status == .starter
+                    && !league.teams[a].roster[$0].player.isRetired
+                    && !ongoing.tradedPlayerIds.contains(league.teams[a].roster[$0].player.id) }
+                .sorted { Rating.overall(for: league.teams[a].roster[$0].player) < Rating.overall(for: league.teams[a].roster[$1].player) }
+            var done = false
+            for ai in aStarters where !done {
+                let slotA = league.teams[a].roster[ai]
+                let ratingA = Rating.overall(for: slotA.player)
+                // 买家队：同位置、有总评高 1-8 且本赛季没被交易过的球员；交易次数少的队优先。
+                var teamCandidates: [(b: Int, players: [Int], bCount: Int)] = []
+                for b in league.teams.indices where b != a {
+                    let bCount = ongoing.tradeCounts[league.teams[b].id.uuidString] ?? 0
+                    var eligible: [Int] = []
+                    for bi in league.teams[b].roster.indices {
+                        let slotB = league.teams[b].roster[bi]
+                        guard slotB.status.isActive, !slotB.player.isRetired,
+                              !ongoing.tradedPlayerIds.contains(slotB.player.id),
+                              slotB.player.position == slotA.player.position else { continue }
+                        let ratingB = Rating.overall(for: slotB.player)
+                        guard ratingB > ratingA && ratingB - ratingA <= 8 else { continue }
+                        eligible.append(bi)
+                    }
+                    if !eligible.isEmpty { teamCandidates.append((b, eligible, bCount)) }
+                }
+                guard !teamCandidates.isEmpty else { continue }
+                let minCount = teamCandidates.map { $0.bCount }.min() ?? 0
+                let preferred = teamCandidates.filter { $0.bCount == minCount }
+                // 优先组里打乱顺序逐个试，直到位置检查通过；先随机挑一队，再随机挑队里一个人。
+                var shuffled = preferred
+                for i in stride(from: shuffled.count - 1, through: 1, by: -1) {
+                    shuffled.swapAt(i, rng.nextInt(in: 0...i))
+                }
+                for teamPick in shuffled {
+                    let bi = teamPick.players[rng.nextInt(in: 0...(teamPick.players.count - 1))]
+                    var trial = league.teams
+                    let slotB = trial[teamPick.b].roster[bi]
+                    trial[a].roster[ai] = slotB
+                    trial[teamPick.b].roster[bi] = slotA
+                    guard positionOK(teams: [trial[a], trial[teamPick.b]]) else { continue }
+                    let nameA = slotA.player.name
+                    let nameB = slotB.player.name
+                    let fromName = league.teams[a].name
+                    let toName = league.teams[teamPick.b].name
+                    league.teams = trial
+                    league.tradeHistory.append(TradeRecord(seasonNumber: ongoing.seasonNumber, fromTeamName: fromName, toTeamName: toName, outPlayerNames: [nameA], inPlayerNames: [nameB], isAuto: true))
+                    ongoing.tradeCounts[aKey, default: 0] += 1
+                    ongoing.tradeCounts[league.teams[teamPick.b].id.uuidString, default: 0] += 1
+                    // 本赛季交易过的人不再交易，别让同一个人被来回倒手。
+                    ongoing.tradedPlayerIds.insert(slotA.player.id)
+                    ongoing.tradedPlayerIds.insert(slotB.player.id)
+                    done = true
+                    break
                 }
             }
-            let preferred = candidates.filter { $0.bCount < 2 }
-            let pool = preferred.isEmpty ? candidates : preferred
-            guard !pool.isEmpty else { continue }
-            let pick = pool[rng.nextInt(in: 0...(pool.count - 1))]
-            var trial = league.teams
-            let slotB = trial[pick.b].roster[pick.bi]
-            trial[a].roster[ai] = slotB
-            trial[pick.b].roster[pick.bi] = slotA
-            guard positionOK(teams: [trial[a], trial[pick.b]]) else { continue }
-            let nameA = slotA.player.name
-            let nameB = slotB.player.name
-            let fromName = league.teams[a].name
-            let toName = league.teams[pick.b].name
-            league.teams = trial
-            league.tradeHistory.append(TradeRecord(seasonNumber: ongoing.seasonNumber, fromTeamName: fromName, toTeamName: toName, outPlayerNames: [nameA], inPlayerNames: [nameB], isAuto: true))
-            ongoing.tradeCounts[aKey, default: 0] += 1
-            ongoing.tradeCounts[league.teams[pick.b].id.uuidString, default: 0] += 1
         }
     }
 
